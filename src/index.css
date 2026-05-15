@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@theme {
+  --color-dark: #0b1120;
+  --color-surface: #0f172a;
+  --color-surface-hover: #1e293b;
+  --color-primary: #00d2ff;
+  --color-primary-hover: #00b8e6;
+  --color-accent: #64748b;
+  --color-muted: #6b7280;
+  --color-border: #1e293b;
+  --color-border-light: #374151;
+  
+  --color-emerald-card: rgba(16, 185, 129, 0.1);
+  --color-amber-card: rgba(245, 158, 11, 0.1);
+  --color-sky-card: rgba(14, 165, 233, 0.1);
+
+  --font-sans: 'Outfit', 'Inter', sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-dark text-slate-200 font-sans h-screen overflow-hidden antialiased;
+  }
+  
+  /* Screen-reader only utility for accessibility helpers */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  * {
+    @apply border-border;
+  }
+}
+
+@layer components {
+  /* Glassmorphism */
+  .glass {
+    @apply bg-surface/60 backdrop-blur-xl border border-white/5;
+  }
+  
+  .glass-hover {
+    @apply hover:bg-white/5 hover:backdrop-blur-2xl transition-all duration-300;
+  }
+
+  /* Layout utilities */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* Premium scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-800 rounded-full hover:bg-slate-700 transition-colors;
+  }
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}

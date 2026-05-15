@@ -1,0 +1,57 @@
+appId: com.leadhunter.ai
+productName: LeadHunter AI
+copyright: Copyright © 2026 LeadHunter
+
+directories:
+  output: dist-electron
+  buildResources: build
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - services/**/*
+  - database/**/*
+  - node_modules/**/*
+  - package.json
+
+asar: true
+npmRebuild: false
+asarUnpack:
+  - node_modules/sqlite3/**/*
+  - node_modules/puppeteer/**/*
+  - node_modules/puppeteer-core/**/*
+
+extraResources:
+  - from: .browsers
+    to: browsers
+    filter:
+      - "**/*"
+  - from: assets
+    to: assets
+    filter:
+      - "**/*"
+  - from: config
+    to: config
+    filter:
+      - "default-smtp.json"
+  - from: docs
+    to: docs
+    filter:
+      - "MANUAL_USUARIO_CAPLEAD_AI.pdf"
+
+win:
+  target:
+    - dir
+  icon: assets/icon.png
+  verifyUpdateCodeSignature: false
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: LeadHunter AI
+  installerIcon: assets/icon.png
+  uninstallerIcon: assets/icon.png
+  installerHeaderIcon: assets/icon.png
