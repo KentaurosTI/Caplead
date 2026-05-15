@@ -9,6 +9,8 @@
     "dev:renderer": "vite",
     "dev:electron": "wait-on tcp:5173 && electron .",
     "setup-skills": "npm install playwright metascraper metascraper-image",
+    "build": "vite build",
+    "build:win": "npm run build && electron-builder --win dir --config electron-builder.yml",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -21,7 +23,8 @@
     "puppeteer": "^24.42.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "sqlite3": "^6.0.1"
+    "sqlite3": "^6.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.4",
@@ -29,6 +32,7 @@
     "autoprefixer": "^10.5.0",
     "concurrently": "^8.2.2",
     "electron": "^25.0.0",
+    "electron-builder": "^25.1.8",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.2.4",
     "vite": "^5.2.2",

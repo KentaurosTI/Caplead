@@ -146,10 +146,13 @@ export default function App() {
 
   // Kentauros Integration State
   const [kentaurosConfig, setKentaurosConfig] = useState({
-    url: '', // URL da Kentauros (ex: https://kentauros-os-app.vercel.app)
-    enabled: false
+    url: 'https://kentauros-os-app.vercel.app',
+    enabled: true,
+    tenantId: 'tenant-a',
+    userId: 1,
   });
   const [kentaurosExportStatus, setKentaurosExportStatus] = useState(null); // { exporting, success, message }
+  const [excelExportStatus, setExcelExportStatus] = useState(null); // { exporting, message }
 
   // Filters State
   const [gridFilters, setGridFilters] = useState({
@@ -702,15 +705,22 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       return;
     }
 
-    setKentaurosExportStatus({ exporting: true, message: 'Enviando leads para Kentauros...' });
+    setKentaurosExportStatus({ exporting: true, message: `Enviando ${leads.length} leads para Kentauros...` });
 
     try {
+      await persistKentaurosConfig(kentaurosConfig);
+
+      const leadIds = leads.map((lead) => lead.id).filter(Boolean);
       const res = await window.electronAPI.exportToKentauros({
         kentaurosUrl: kentaurosConfig.url,
-        leads,
-        userId: null, // Pode ser implementado com auth
+        leadIds: leadIds.length ? leadIds : undefined,
+        leads: leadIds.length ? undefined : leads,
+        source: 'sites',
+        userId: kentaurosConfig.userId || 1,
+        tenantId: kentaurosConfig.tenantId || 'tenant-a',
         userEmail: smtpConfig.user || '',
-        userName: smtpConfig.user?.split('@')[0] || 'CapLead',
+        userName: smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'CapLead',
+        capturedBySource: smtpConfig.signatureName || '',
       });
 
       if (res.success) {
@@ -732,7 +742,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         });
         showAppAlert({
           title: 'Erro na exportação',
-          message: res.error,
+          message: res.error || 'Não foi possível conectar à Kentauros. Verifique a URL (sem /leads no final) e sua internet.',
           variant: 'danger'
         });
       }
@@ -751,6 +761,73 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
     // Limpar status após 5 segundos
     setTimeout(() => setKentaurosExportStatus(null), 5000);
+  };
+
+  const buildExcelLeadPayload = async (lead) => {
+    let contacts = [];
+    if (lead?.id && (lead._typeCode || 'sites') === 'sites') {
+      try {
+        const res = await window.electronAPI.getContatos(lead.id);
+        if (res.success && Array.isArray(res.data)) contacts = res.data;
+      } catch (err) {
+        console.error('Erro ao carregar contatos para exportação Excel:', err);
+      }
+    }
+
+    const email = await getLeadEmail(lead);
+    const phone = getBestPhoneForLead(lead, contacts);
+
+    return {
+      ...lead,
+      email,
+      telefone: phone.label || lead.telefone || '',
+      url: getLeadUrl(lead),
+    };
+  };
+
+  const exportLeadsToExcel = async (leads, typeCode = 'sites') => {
+    if (!leads.length) {
+      showAppAlert({
+        title: 'Nenhum lead para exportar',
+        message: 'Selecione leads ou ajuste os filtros antes de exportar para Excel.',
+        variant: 'info'
+      });
+      return;
+    }
+
+    setExcelExportStatus({ exporting: true, message: `Preparando ${leads.length} leads para Excel...` });
+
+    try {
+      const preparedLeads = await Promise.all(leads.map(lead => buildExcelLeadPayload({ ...lead, _typeCode: lead._typeCode || typeCode })));
+      const res = await window.electronAPI.exportLeadsExcel({ leads: preparedLeads });
+
+      if (res.success) {
+        setExcelExportStatus({ exporting: false, message: `${res.rows} leads exportados para Excel.` });
+        showAppAlert({
+          title: 'Excel exportado',
+          message: `${res.rows} leads foram exportados com as colunas Nome da empresa, E-mail, Número de WhatsApp para contato e Site.`,
+          variant: 'success'
+        });
+      } else if (!res.canceled) {
+        setExcelExportStatus({ exporting: false, message: res.error });
+        showAppAlert({
+          title: 'Erro ao exportar Excel',
+          message: res.error || 'Não foi possível gerar a planilha.',
+          variant: 'danger'
+        });
+      } else {
+        setExcelExportStatus(null);
+      }
+    } catch (error) {
+      setExcelExportStatus({ exporting: false, message: error.message });
+      showAppAlert({
+        title: 'Erro ao exportar Excel',
+        message: error.message,
+        variant: 'danger'
+      });
+    }
+
+    setTimeout(() => setExcelExportStatus(null), 5000);
   };
 
   const fetchDashboardData = async () => {
@@ -798,9 +875,32 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         signatureName: sign?.valor || ''
       });
       setShowOnboarding(onboardingDone?.valor !== '1' && !pass?.valor);
+
+      if (window.electronAPI?.getKentaurosConfig) {
+        const kRes = await window.electronAPI.getKentaurosConfig();
+        if (kRes?.success && kRes.config) {
+          setKentaurosConfig(prev => ({
+            ...prev,
+            url: kRes.config.url || prev.url,
+            enabled: kRes.config.enabled ?? prev.enabled,
+            tenantId: kRes.config.tenantId || prev.tenantId,
+            userId: kRes.config.userId || prev.userId,
+          }));
+        }
+      }
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const persistKentaurosConfig = async (nextConfig) => {
+    if (!window.electronAPI?.saveKentaurosConfig) return;
+    await window.electronAPI.saveKentaurosConfig({
+      url: nextConfig.url,
+      enabled: nextConfig.enabled,
+      tenantId: nextConfig.tenantId,
+      userId: nextConfig.userId,
+    });
   };
 
   useEffect(() => {
@@ -864,9 +964,19 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
           });
           setActiveMenu('sites');
         }
+        const kSync = res.kentaurosSync;
+        let syncNote = '';
+        if (kSync?.skipped && kentaurosConfig.enabled) {
+          syncNote = '';
+        } else if (kSync?.success && !kSync.skipped) {
+          syncNote = ` | Kentauros: ${kSync.imported} enviado(s)${kSync.duplicates ? `, ${kSync.duplicates} duplicado(s)` : ''}`;
+        } else if (kSync && !kSync.success && kentaurosConfig.enabled) {
+          syncNote = ` | Kentauros: falha (${kSync.error})`;
+        }
+
         setCaptureStatus({
           status: 'success',
-          message: res.message || `Captura finalizada. ${savedCount}/${targetCount} leads ${contactLabel} salvos.`,
+          message: (res.message || `Captura finalizada. ${savedCount}/${targetCount} leads ${contactLabel} salvos.`) + syncNote,
           percent: 100,
           currentLead: ''
         });
@@ -2470,7 +2580,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               </div>
               <div>
                 <h3 className="text-xl font-bold text-white">Integração Kentauros OS</h3>
-                <p className="text-slate-400 text-sm">Exporte leads capturados para o sistema Kentauros</p>
+                <p className="text-slate-400 text-sm">Envio automático em tempo real após cada captura</p>
               </div>
             </div>
 
@@ -2478,7 +2588,11 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               <div className="flex items-center justify-between">
                 <label className="text-slate-300 font-medium">Ativar integração</label>
                 <button
-                  onClick={() => setKentaurosConfig(prev => ({ ...prev, enabled: !prev.enabled }))}
+                  onClick={() => {
+                    const next = { ...kentaurosConfig, enabled: !kentaurosConfig.enabled };
+                    setKentaurosConfig(next);
+                    persistKentaurosConfig(next);
+                  }}
                   className={`relative w-12 h-6 rounded-full transition-colors ${kentaurosConfig.enabled ? 'bg-k-gold-500' : 'bg-white/10'}`}
                 >
                   <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${kentaurosConfig.enabled ? 'right-1' : 'left-1'}`} />
@@ -2492,8 +2606,12 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   placeholder="https://kentauros-os-app.vercel.app"
                   value={kentaurosConfig.url}
                   onChange={(e) => setKentaurosConfig(prev => ({ ...prev, url: e.target.value }))}
+                  onBlur={() => persistKentaurosConfig(kentaurosConfig)}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-k-gold-500/50"
                 />
+                <p className="text-slate-500 text-xs mt-2">
+                  Leads capturados são enviados automaticamente para esta URL quando a integração está ativa.
+                </p>
               </div>
 
               {kentaurosExportStatus && (
@@ -3002,6 +3120,15 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                 <Rocket size={16} /> Exportar ({filteredList.length})
               </button>
             )}
+
+            <button
+              onClick={() => exportLeadsToExcel(selectedCount > 0 ? selectedInGrid : filteredList, typeCode)}
+              disabled={excelExportStatus?.exporting || filteredList.length === 0}
+              className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/45 hover:bg-cyan-500 hover:text-white px-5 py-2.5 rounded-xl transition-all font-semibold text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={selectedCount > 0 ? 'Exportar leads selecionados para Excel' : 'Exportar leads filtrados para Excel'}
+            >
+              <Download size={16} /> Excel ({selectedCount > 0 ? selectedCount : filteredList.length})
+            </button>
 
             {typeCode === 'sites' && (
               <>
@@ -4428,4 +4555,3 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     </div>
   );
 }
-

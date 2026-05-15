@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resetLeads: (table, nicheFilter) => safeInvoke('reset-leads', table, nicheFilter),
   totalReset: () => safeInvoke('total-reset'),
   cleanCapturedSiteLeads: () => safeInvoke('clean-captured-site-leads'),
+  exportLeadsExcel: (data) => safeInvoke('export-leads-excel', data),
   blockLead: (table, id, status) => safeInvoke('block-lead', table, id, status),
 
   // Real-time events
@@ -91,4 +92,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getInteracoes: (leadId, leadTipo) => safeInvoke('get-interacoes', leadId, leadTipo),
   deleteInteracao: (id) => safeInvoke('delete-interacao', id),
   updateLeadFunil: (table, id, status, proximoPasso, followupDate) => safeInvoke('update-lead-funil', table, id, status, proximoPasso, followupDate),
+
+  // Kentauros Integration
+  getKentaurosConfig: () => safeInvoke('get-kentauros-config'),
+  saveKentaurosConfig: (config) => safeInvoke('save-kentauros-config', config),
+  exportToKentauros: (data) => safeInvoke('export-to-kentauros', data),
+  onKentaurosExportProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('kentauros-export-progress', listener);
+    return () => ipcRenderer.removeListener('kentauros-export-progress', listener);
+  },
+  testKentaurosConnection: (url) => safeInvoke('test-kentauros-connection', url),
 });

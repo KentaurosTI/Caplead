@@ -7,7 +7,9 @@ const prototypeGenerator = require('./prototypeGenerator');
 const clientLayoutPipeline = require('./clientLayoutPipeline');
 const emailService = require('./emailService');
 const linkedinScraper = require('./linkedinScraper');
-const { shell } = require('electron');
+const kentaurosExport = require('./kentaurosExport');
+const leadsExcelExport = require('./leadsExcelExport');
+const { app, shell, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -88,13 +90,23 @@ function setupIpcHandlers(ipcMain, mainWindow) {
       if (info.count > 0) {
         broadcastUpdate();
       }
+
+      let kentaurosSync = null;
+      if (info.capturados?.length) {
+        kentaurosSync = await kentaurosExport.syncCapturedLeadsToKentauros(info.capturados, {
+          userEmail: params.userEmail,
+          userName: params.userName,
+        });
+      }
+
       return { 
         success: true, 
         message: `Captura finalizada. ${info.count}/${info.target || params.limit || info.count} leads salvos, ${info.duplicates || 0} repetidos ignorados.`,
         data: info.capturados,
         count: info.count,
         target: info.target || params.limit,
-        contactFilterMode: info.contactFilterMode
+        contactFilterMode: info.contactFilterMode,
+        kentaurosSync,
       };
     } catch (err) {
       console.error(err);
@@ -141,7 +153,16 @@ function setupIpcHandlers(ipcMain, mainWindow) {
       if (info.count > 0) {
         broadcastUpdate();
       }
-      return info;
+
+      let kentaurosSync = null;
+      if (info.capturados?.length) {
+        kentaurosSync = await kentaurosExport.syncCapturedLeadsToKentauros(info.capturados, {
+          userEmail: params.userEmail,
+          userName: params.userName,
+        });
+      }
+
+      return { ...info, kentaurosSync };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -286,6 +307,33 @@ function setupIpcHandlers(ipcMain, mainWindow) {
   });
 
   // Ações de Auxiliares e Locais (CRUD)
+  ipcMain.handle('export-leads-excel', async (event, { leads = [] } = {}) => {
+    try {
+      if (!Array.isArray(leads) || leads.length === 0) {
+        return { success: false, error: 'Nenhum lead para exportar.' };
+      }
+
+      const downloadsPath = app?.getPath ? app.getPath('downloads') : process.cwd();
+      const defaultPath = path.join(downloadsPath, `caplead-leads-${new Date().toISOString().slice(0, 10)}.xlsx`);
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: 'Exportar leads para Excel',
+        defaultPath,
+        filters: [{ name: 'Planilha Excel', extensions: ['xlsx'] }],
+      });
+
+      if (canceled || !filePath) {
+        return { success: false, canceled: true };
+      }
+
+      const result = leadsExcelExport.writeLeadsExcelFile(filePath, leads);
+      shell.showItemInFolder(filePath);
+      return { success: true, ...result };
+    } catch (err) {
+      console.error('Erro ao exportar Excel:', err);
+      return { success: false, error: err.message || 'Falha ao exportar Excel.' };
+    }
+  });
+
   handleIpc('create-lead-site', crud.createLeadSite, true);
   handleIpc('get-lead-sites', crud.getAllLeadSites);
   handleIpc('update-lead-site', crud.updateLeadSite, true);
@@ -308,7 +356,16 @@ function setupIpcHandlers(ipcMain, mainWindow) {
     try {
       const info = await linkedinScraper.searchLinkedinLeads(params.nicho, params.regiao);
       if (info.count > 0) broadcastUpdate();
-      return info;
+
+      let kentaurosSync = null;
+      if (info.capturados?.length) {
+        kentaurosSync = await kentaurosExport.syncCapturedLeadsToKentauros(info.capturados, {
+          userEmail: params.userEmail,
+          userName: params.userName,
+        });
+      }
+
+      return { ...info, kentaurosSync };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -479,80 +536,62 @@ function setupIpcHandlers(ipcMain, mainWindow) {
   // INTEGRAÇÃO COM KENTAUROS
   // ========================================
 
-  // Envia leads capturados para a API da Kentauros
-  ipcMain.handle('export-to-kentauros', async (event, { kentaurosUrl, leads, userId, userEmail, userName }) => {
-    if (!kentaurosUrl) {
-      return { success: false, error: 'URL da Kentauros não configurada' };
-    }
-    if (!leads || leads.length === 0) {
-      return { success: false, error: 'Nenhum lead para exportar' };
-    }
-
-    console.log('[Export] Enviando', leads.length, 'leads para Kentauros');
-
+  ipcMain.handle('get-kentauros-config', async () => {
     try {
-      // Normalizar dados dos leads para o formato esperado pela Kentauros
-      const normalizedLeads = leads.map(lead => ({
-        nome: lead.nome || lead.company || '',
-        empresa: lead.empresa || lead.company || '',
-        site_oficial: lead.site_oficial || lead.website || lead.url || '',
-        url: lead.site_oficial || lead.website || lead.url || '',
-        email: lead.email || '',
-        telefone: lead.telefone || lead.phone || '',
-        nicho: lead.nicho || lead.industry || '',
-        categoria: lead.categoria || lead.category || '',
-        cidade: lead.cidade || lead.city || '',
-        estado: lead.estado || lead.state || '',
-        descricao: lead.descricao || lead.description || '',
-        maps_url: lead.maps_url || '',
-        source: lead.source || 'CapLead',
-      }));
-
-      const response = await fetch(`${kentaurosUrl}/api/leads/import`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          leads: normalizedLeads,
-          userId,
-          userEmail,
-          userName,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (result.success) {
-        console.log('[Export] Sucesso:', result.summary);
-        return {
-          success: true,
-          imported: result.summary.imported,
-          duplicates: result.summary.duplicates,
-          failed: result.summary.failed,
-        };
-      } else {
-        console.error('[Export] Erro:', result.message);
-        return { success: false, error: result.message };
-      }
+      const config = await kentaurosExport.getKentaurosConfig();
+      return { success: true, config };
     } catch (error) {
-      console.error('[Export] Erro na requisição:', error);
       return { success: false, error: error.message };
     }
   });
 
-  // Testa conexão com a API da Kentauros
-  ipcMain.handle('test-kentauros-connection', async (event, kentaurosUrl) => {
-    if (!kentaurosUrl) {
-      return { success: false, error: 'URL da Kentauros não informada' };
+  ipcMain.handle('save-kentauros-config', async (event, { url, enabled, apiKey, tenantId, userId }) => {
+    try {
+      if (url !== undefined) await crud.setConfig('kentauros_url', url);
+      if (enabled !== undefined) await crud.setConfig('kentauros_enabled', enabled ? '1' : '0');
+      if (apiKey !== undefined) await crud.setConfig('kentauros_api_key', apiKey);
+      if (tenantId !== undefined) await crud.setConfig('kentauros_tenant_id', tenantId);
+      if (userId !== undefined) await crud.setConfig('kentauros_user_id', String(userId));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('export-to-kentauros', async (event, payload = {}) => {
+    const { kentaurosUrl, leads, leadIds, source, userId, userEmail, userName, capturedBySource, tenantId, apiKey } = payload;
+
+    if ((!leads || leads.length === 0) && (!leadIds || leadIds.length === 0)) {
+      return { success: false, error: 'Nenhum lead para exportar' };
     }
 
     try {
-      const response = await fetch(`${kentaurosUrl}/api/leads/import`, {
-        method: 'GET',
+      return await kentaurosExport.exportLeadsToKentauros({
+        kentaurosUrl,
+        leads,
+        leadIds,
+        source: source || 'sites',
+        userId,
+        userEmail,
+        userName,
+        capturedBySource,
+        tenantId,
+        apiKey,
+        onProgress: (progress) => {
+          if (event.sender && !event.sender.isDestroyed()) {
+            event.sender.send('kentauros-export-progress', progress);
+          }
+        },
       });
-      const data = await response.json();
-      return { success: data.ok === true, data };
+    } catch (error) {
+      console.error('[Export] Erro na requisição:', error);
+      return { success: false, error: error.message || 'Falha ao exportar para Kentauros' };
+    }
+  });
+
+  ipcMain.handle('test-kentauros-connection', async (event, kentaurosUrl) => {
+    try {
+      return await kentaurosExport.testKentaurosConnection(kentaurosUrl);
     } catch (error) {
       return { success: false, error: error.message };
     }
