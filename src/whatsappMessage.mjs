@@ -1,3 +1,11 @@
+export const KENTAUROS_WHATSAPP_BUSINESS = '11930186652';
+
+export function formatWhatsappBusinessContact(value = KENTAUROS_WHATSAPP_BUSINESS) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 11) return digits;
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
 export function normalizeWhatsappPhone(value = '') {
   const digits = String(value || '').replace(/\D/g, '');
   if (!digits) return '';
@@ -13,7 +21,8 @@ export function buildWhatsappMessage(lead = {}, senderName = 'Kentauros') {
   return [
     `Olá, tudo bem? Aqui é ${sender} da Kentauros.`,
     `Vi a presença digital da ${company} e identifiquei alguns pontos que podem ajudar a gerar mais contatos com soluções feitas em IA.`,
-    'Posso te enviar um diagnóstico rápido?'
+    'Posso te enviar um diagnóstico rápido?',
+    `Meu WhatsApp Business é ${formatWhatsappBusinessContact()}.`
   ].join('\n\n');
 }
 
