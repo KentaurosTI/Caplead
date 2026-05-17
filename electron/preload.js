@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openUserManual: () => safeInvoke('open-path', '__CAPLEAD_USER_MANUAL__'),
   openFile: (path) => safeInvoke('open-file', path),
   openPath: (path) => safeInvoke('open-path', path),
+  openExternalUrl: (url) => safeInvoke('open-external-url', url),
   checkSiteStatus: (id, url) => safeInvoke('check-site-status', { id, url }),
   setLeadValidation: (table, id, status, manual = false) => safeInvoke('set-lead-validation', table, id, status, manual),
   resetLeads: (table, nicheFilter) => safeInvoke('reset-leads', table, nicheFilter),

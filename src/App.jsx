@@ -9,6 +9,7 @@ import {
   MoreHorizontal, Info, Calendar, ListFilter, ChevronLeft, ChevronRight, Bot, Bell, Radio, Trash2,
   Rocket
 } from 'lucide-react';
+import { buildWhatsappUrl } from './whatsappMessage.mjs';
 
 const ASSINATURA_PATH = 'Assinatura.png';
 const ASSINATURA_CID = 'assinatura-caplead';
@@ -763,6 +764,129 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     setTimeout(() => setKentaurosExportStatus(null), 5000);
   };
 
+  const getLeadTableName = (typeCode = 'sites') => (
+    typeCode === 'sistema' ? 'leads_sistemas' : typeCode === 'linkedin' ? 'leads_linkedin' : 'leads_sites'
+  );
+
+  const getKentaurosLeadSource = (typeCode = 'sites') => (
+    typeCode === 'sistema' ? 'sistemas' : typeCode === 'linkedin' ? 'linkedin' : 'sites'
+  );
+
+  const updateWhatsappState = (leadId, typeCode, patch) => {
+    const updateLead = item => item.id === leadId ? { ...item, ...patch } : item;
+    if (typeCode === 'sites') setSites(current => current.map(updateLead));
+    if (typeCode === 'sistema') setSistemas(current => current.map(updateLead));
+    if (typeCode === 'linkedin') setLinkedin(current => current.map(updateLead));
+  };
+
+  const syncWhatsappLeadToKentauros = async (lead, typeCode, sentAt) => {
+    if (!kentaurosConfig.url || !kentaurosConfig.enabled) {
+      throw new Error('Kentauros não configurada para sincronização automática.');
+    }
+
+    await persistKentaurosConfig(kentaurosConfig);
+
+    const res = await window.electronAPI.exportToKentauros({
+      kentaurosUrl: kentaurosConfig.url,
+      leads: [{
+        ...lead,
+        _typeCode: typeCode,
+        wpp_enviado: 1,
+        wpp_enviado_at: sentAt,
+        whatsappSentAt: sentAt,
+        whatsappMessageStatus: 'sent',
+        funil_status: 'contatado',
+        proximo_passo: 'Acompanhar retorno no WhatsApp',
+      }],
+      source: getKentaurosLeadSource(typeCode),
+      userId: kentaurosConfig.userId || 1,
+      tenantId: kentaurosConfig.tenantId || 'tenant-a',
+      userEmail: smtpConfig.user || '',
+      userName: smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'CapLead',
+      capturedBySource: smtpConfig.signatureName || '',
+    });
+
+    if (!res.success) {
+      throw new Error(res.error || 'Não foi possível sincronizar com a Kentauros.');
+    }
+
+    return res;
+  };
+
+  const confirmWhatsappSent = async (lead, typeCode, { showSuccess = true } = {}) => {
+    const leadTypeCode = lead._typeCode || typeCode || 'sites';
+    const table = getLeadTableName(leadTypeCode);
+    const sentAt = new Date().toISOString();
+    const patch = {
+      wpp_enviado: 1,
+      wpp_enviado_at: sentAt,
+      funil_status: 'contatado',
+      proximo_passo: 'Acompanhar retorno no WhatsApp',
+    };
+
+    try {
+      await window.electronAPI.updateLeadWppStatus(table, lead.id, true);
+      await window.electronAPI.setLeadValidation(table, lead.id, 1);
+      await window.electronAPI.addInteracao(lead.id, leadTypeCode, 'whatsapp', 'Mensagem inicial enviada via WhatsApp pelo CapLead.');
+
+      if (leadTypeCode !== 'linkedin') {
+        await window.electronAPI.updateLeadFunil(table, lead.id, 'contatado', patch.proximo_passo, addDaysIso(2));
+      }
+
+      updateWhatsappState(lead.id, leadTypeCode, patch);
+      const syncResult = await syncWhatsappLeadToKentauros({ ...lead, ...patch }, leadTypeCode, sentAt);
+      await fetchDashboardData();
+
+      if (showSuccess) {
+        const updated = Number(syncResult.updated || 0);
+        showAppAlert({
+          title: 'WhatsApp registrado',
+          message: updated > 0
+            ? 'Envio confirmado no CapLead e atualizado na Kentauros.'
+            : 'Envio confirmado no CapLead e enviado para a Kentauros.',
+          variant: 'success'
+        });
+      }
+    } catch (error) {
+      await fetchDashboardData();
+      showAppAlert({
+        title: 'WhatsApp registrado com aviso',
+        message: `O status foi salvo no CapLead, mas a sincronização automática precisa de atenção: ${error.message}`,
+        variant: 'warning'
+      });
+    }
+  };
+
+  const startWhatsappMessageFlow = async (lead, typeCode) => {
+    const leadTypeCode = lead._typeCode || typeCode || 'sites';
+    const phone = getBestPhoneForLead(lead);
+    if (phone.type === 'none') {
+      showAppAlert({ title: 'WhatsApp não encontrado', message: 'Este lead não possui número de telefone para abrir o WhatsApp.', variant: 'warning' });
+      return;
+    }
+
+    const whatsappUrl = buildWhatsappUrl(lead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus');
+    if (!whatsappUrl) {
+      showAppAlert({ title: 'WhatsApp não encontrado', message: 'Não foi possível preparar o link de WhatsApp deste lead.', variant: 'warning' });
+      return;
+    }
+
+    const opened = await window.electronAPI.openExternalUrl(whatsappUrl);
+    if (!opened.success) {
+      showAppAlert({ title: 'Erro ao abrir WhatsApp', message: opened.error || 'Não foi possível abrir o WhatsApp nesta máquina.', variant: 'danger' });
+      return;
+    }
+
+    showAppConfirm({
+      title: 'Confirmar envio pelo WhatsApp',
+      message: `O WhatsApp foi aberto com a mensagem pronta para ${getLeadName(lead)}. Depois de enviar a mensagem, confirme para marcar como enviado e sincronizar com a Kentauros.`,
+      confirmLabel: 'Confirmar envio',
+      cancelLabel: 'Ainda não enviei',
+      variant: 'success',
+      onConfirm: () => confirmWhatsappSent(lead, leadTypeCode)
+    });
+  };
+
   const buildExcelLeadPayload = async (lead) => {
     let contacts = [];
     if (lead?.id && (lead._typeCode || 'sites') === 'sites') {
@@ -1221,13 +1345,15 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
   };
 
   const handleWppChange = async (lead, typeCode, e) => {
-    const table = typeCode === 'sistema' ? 'leads_sistemas' : typeCode === 'linkedin' ? 'leads_linkedin' : 'leads_sites';
     const checked = e.target.checked;
+    if (checked) {
+      await confirmWhatsappSent(lead, typeCode, { showSuccess: true });
+      return;
+    }
+
+    const table = getLeadTableName(typeCode);
     await window.electronAPI.updateLeadWppStatus(table, lead.id, checked);
-    const updateLead = item => item.id === lead.id ? { ...item, wpp_enviado: checked ? 1 : 0 } : item;
-    if (typeCode === 'sites') setSites(current => current.map(updateLead));
-    if (typeCode === 'sistema') setSistemas(current => current.map(updateLead));
-    if (typeCode === 'linkedin') setLinkedin(current => current.map(updateLead));
+    updateWhatsappState(lead.id, typeCode, { wpp_enviado: 0, wpp_enviado_at: null });
     fetchDashboardData();
   };
 
@@ -1602,18 +1728,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     }
 
     if (lead?.telefone) {
-      showAppConfirm({
-        title: 'Marcar WhatsApp enviado',
-        message: `Deseja marcar ${getLeadName(lead)} como abordado via WhatsApp?`,
-        confirmLabel: 'Marcar enviado',
-        variant: 'success',
-        onConfirm: async () => {
-          const table = leadTypeCode === 'sistema' ? 'leads_sistemas' : leadTypeCode === 'linkedin' ? 'leads_linkedin' : 'leads_sites';
-          await window.electronAPI.updateLeadWppStatus(table, lead.id, true);
-          await window.electronAPI.setLeadValidation(table, lead.id, 1);
-          await fetchDashboardData();
-        }
-      });
+      await startWhatsappMessageFlow(lead, leadTypeCode);
       return;
     }
 
@@ -3529,9 +3644,14 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                           </span>
                         )}
                         {rowPhone.type === 'mobile' && !lead.wpp_enviado ? (
-                          <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-300 text-[10px] px-2 py-0.5 rounded-md font-medium w-max">
-                            <MessageCircle size={10} /> WhatsApp Capturado
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => startWhatsappMessageFlow(lead, rowTypeCode)}
+                            className="inline-flex items-center gap-1 bg-green-500/15 text-green-300 hover:bg-green-500 hover:text-white text-[10px] px-2 py-0.5 rounded-md font-medium w-max transition-colors"
+                            title="Abrir WhatsApp com mensagem pronta"
+                          >
+                            <MessageCircle size={10} /> Enviar WhatsApp
+                          </button>
                         ) : rowPhone.type === 'fixed' ? (
                           <span className="inline-flex items-center gap-1 bg-amber-500/15 text-amber-300 text-[10px] px-2 py-0.5 rounded-md font-medium w-max">
                             <Phone size={10} /> Fixo encontrado

@@ -49,6 +49,19 @@ function setupIpcHandlers(ipcMain, mainWindow) {
     }
   });
 
+  ipcMain.handle('open-external-url', async (event, url) => {
+    try {
+      const target = String(url || '').trim();
+      if (!/^https?:\/\//i.test(target)) {
+        return { success: false, error: 'URL externa invÃ¡lida.' };
+      }
+      await shell.openExternal(target);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   const broadcastUpdate = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('db-update');

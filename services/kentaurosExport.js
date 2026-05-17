@@ -40,6 +40,9 @@ const normalizeLeadForKentauros = (lead) => {
     valor_estimado: pricedLead.valor_estimado,
     pricingModel: pricedLead.pricingModel,
     pricingBasis: pricedLead.pricingBasis,
+    wpp_enviado: pricedLead.wpp_enviado ? 1 : 0,
+    whatsappMessageStatus: pricedLead.wpp_enviado ? 'sent' : 'pending',
+    whatsappSentAt: pricedLead.whatsappSentAt || pricedLead.wpp_enviado_at || '',
   };
 };
 
@@ -234,7 +237,7 @@ async function exportLeadsToKentauros({
 
   console.log('[Kentauros Export] Enviando', normalizedLeads.length, 'lead(s) em lotes para', baseUrl);
 
-  const totals = { imported: 0, duplicates: 0, failed: 0, total: normalizedLeads.length };
+  const totals = { imported: 0, updated: 0, duplicates: 0, failed: 0, total: normalizedLeads.length };
   const batches = Math.ceil(normalizedLeads.length / BATCH_SIZE);
 
   for (let i = 0; i < normalizedLeads.length; i += BATCH_SIZE) {
@@ -251,6 +254,7 @@ async function exportLeadsToKentauros({
 
     const summary = await postImportBatch(baseUrl, batch, meta, resolvedApiKey);
     totals.imported += summary.imported || 0;
+    totals.updated += summary.updated || 0;
     totals.duplicates += summary.duplicates || 0;
     totals.failed += summary.failed || 0;
   }
@@ -260,6 +264,7 @@ async function exportLeadsToKentauros({
   return {
     success: true,
     imported: totals.imported,
+    updated: totals.updated,
     duplicates: totals.duplicates,
     failed: totals.failed,
     summary: totals,

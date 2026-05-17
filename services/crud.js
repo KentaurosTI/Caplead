@@ -476,7 +476,8 @@ const crud = {
   updateLeadWppStatus: async (table, id, status) => {
     const validTables = ['leads_sites', 'leads_sistemas', 'leads_linkedin'];
     if (!validTables.includes(table)) throw new Error("Tabela inválida");
-    return runQuery(`UPDATE ${table} SET wpp_enviado = ? WHERE id = ?`, [status ? 1 : 0, id]);
+    const sentAt = status ? new Date().toISOString() : null;
+    return runQuery(`UPDATE ${table} SET wpp_enviado = ?, wpp_enviado_at = ? WHERE id = ?`, [status ? 1 : 0, sentAt, id]);
   },
   togglePinLead: async (table, id, status) => {
     const validTables = ['leads_sites', 'leads_sistemas', 'leads_linkedin'];
