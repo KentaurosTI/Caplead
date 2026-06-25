@@ -1,18 +1,29 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   MousePointer2, ExternalLink, X, Check, FolderPlus, Camera, Pin,
   Paperclip, Edit3, FileText, Linkedin, ShieldAlert, Eye, EyeOff,
   LayoutDashboard, Search, LayoutTemplate, Layers, SearchCheck, Mail, Send,
   MessageCircle, Filter, History, ChevronDown, Clock, Phone, Users, FileCheck,
   Zap, Activity, Target, CheckCircle, MapPin, Globe, Settings, Lock, Hash, PenTool, Server, Save,
-  Download, BookOpen,
+  Download, BookOpen, Upload, Database,
   MoreHorizontal, Info, Calendar, ListFilter, ChevronLeft, ChevronRight, Bot, Bell, Radio, Trash2,
-  Rocket
+  Rocket, ChevronUp, ChevronsUpDown, AlertTriangle, Smartphone, Loader2, TrendingDown, RefreshCw,
+  Play, Pause, SkipForward, StopCircle, ListChecks, CircleCheck
 } from 'lucide-react';
-import { buildWhatsappUrl } from './whatsappMessage.mjs';
+import { buildWhatsappUrl, buildWhatsappMessage, normalizeWhatsappPhone } from './whatsappMessage.mjs';
 
 const ASSINATURA_PATH = 'Assinatura.png';
 const ASSINATURA_CID = 'assinatura-caplead';
+const DEFAULT_GRID_FILTERS = {
+  source: 'todos',
+  date: 'todos',
+  nameQuery: '',
+  hasEmail: false,
+  hasWpp: false,
+  wppSent: false,
+  highOpportunity: false,
+  followupDue: false
+};
 
 const SMTP_PRESETS = {
   gmail: {
@@ -45,6 +56,8 @@ const DEFAULT_CAPTURE_LIMIT = 20;
 const EMAIL_SAFE_DAILY_LIMIT = 80;
 const EMAIL_SAFE_BATCH_LIMIT = 40;
 const EMAIL_SEND_DELAY_MS = 2500;
+const EMAIL_SEND_DELAY_MIN = 1000;
+const EMAIL_SEND_DELAY_MAX = 30000;
 
 const getCaptureContactLabel = ({ requireEmail, requireWhatsapp } = {}) => {
   if (requireEmail && requireWhatsapp) return 'com e-mail e WhatsApp';
@@ -62,6 +75,7 @@ const normalizeSmtpSecure = (port, secureValue) => {
 
 export default function App() {
   const [activeMenu, setActiveMenu] = useState('geral');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [metrics, setMetrics] = useState({ totalLeads: 0, analyzedToday: 0 });
   const [latestAnalyses, setLatestAnalyses] = useState([]);
   
@@ -76,6 +90,7 @@ export default function App() {
   const [automationSummary, setAutomationSummary] = useState(null);
   const [wppFilter, setWppFilter] = useState(false); // false = todos, true = apenas não contatados por Wpp
   const bulkCancelRef = useRef(false); // sinal de cancelamento para loops em lote
+  const dbUpdateDebounceRef = useRef(null);
 
   // CRM Modal state
   const [crmModal, setCrmModal] = useState(null); // { lead, typeCode, interacoes, funil }
@@ -114,21 +129,82 @@ export default function App() {
   ];
 
   const REGIAO_OPTIONS = [
-    "São Paulo, SP", "Rio de Janeiro, RJ", "Belo Horizonte, MG", "Curitiba, PR",
-    "Porto Alegre, RS", "Brasília, DF", "Salvador, BA", "Fortaleza, CE",
-    "Recife, PE", "Goiânia, GO", "Manaus, AM", "Campinas, SP", "Guarulhos, SP",
-    "Osasco, SP", "Santo André, SP", "São Bernardo do Campo, SP", "Santos, SP",
-    "Ribeirão Preto, SP", "Sorocaba, SP", "São José dos Campos, SP",
-    "Contagem, MG", "Uberlândia, MG", "Juiz de Fora, MG", "Betim, MG",
-    "Niterói, RJ", "Duque de Caxias, RJ", "Nova Iguaçu, RJ",
-    "Florianópolis, SC", "Joinville, SC", "Blumenau, SC",
-    "Londrina, PR", "Maringá, PR", "Foz do Iguaçu, PR",
-    "Caxias do Sul, RS", "Canoas, RS", "Pelotas, RS",
-    "Vitória, ES", "Vila Velha, ES", "Serra, ES",
-    "Natal, RN", "João Pessoa, PB", "Maceió, AL", "Aracaju, SE",
-    "São Luís, MA", "Teresina, PI", "Belém, PA", "Ananindeua, PA",
-    "Cuiabá, MT", "Campo Grande, MS", "Palmas, TO", "Porto Velho, RO",
-    "Boa Vista, RR", "Macapá, AP", "Rio Branco, AC", "Brasil"
+    {
+      group: "Capitais — Sudeste",
+      items: ["São Paulo, SP", "Rio de Janeiro, RJ", "Belo Horizonte, MG", "Vitória, ES"]
+    },
+    {
+      group: "Capitais — Sul",
+      items: ["Curitiba, PR", "Porto Alegre, RS", "Florianópolis, SC"]
+    },
+    {
+      group: "Capitais — Nordeste",
+      items: ["Salvador, BA", "Fortaleza, CE", "Recife, PE", "Natal, RN", "João Pessoa, PB", "Maceió, AL", "Aracaju, SE", "São Luís, MA", "Teresina, PI"]
+    },
+    {
+      group: "Capitais — Centro-Oeste",
+      items: ["Brasília, DF", "Goiânia, GO", "Cuiabá, MT", "Campo Grande, MS"]
+    },
+    {
+      group: "Capitais — Norte",
+      items: ["Manaus, AM", "Belém, PA", "Porto Velho, RO", "Boa Vista, RR", "Macapá, AP", "Rio Branco, AC", "Palmas, TO"]
+    },
+    {
+      group: "São Paulo — Interior",
+      items: ["Campinas, SP", "Guarulhos, SP", "Osasco, SP", "Santo André, SP", "São Bernardo do Campo, SP", "Santos, SP", "Ribeirão Preto, SP", "Sorocaba, SP", "São José dos Campos, SP", "Mauá, SP", "São Vicente, SP", "Guarujá, SP", "Taubaté, SP", "Americana, SP", "Limeira, SP", "Franca, SP", "Suzano, SP", "São Carlos, SP", "São José do Rio Preto, SP", "Presidente Prudente, SP", "Jundiaí, SP", "Piracicaba, SP", "Bauru, SP", "Praia Grande, SP", "Carapicuíba, SP", "Mogi das Cruzes, SP", "Diadema, SP", "São Caetano do Sul, SP", "Indaiatuba, SP", "Araraquara, SP"]
+    },
+    {
+      group: "Rio de Janeiro — Interior",
+      items: ["Niterói, RJ", "Duque de Caxias, RJ", "Nova Iguaçu, RJ", "São Gonçalo, RJ", "Belford Roxo, RJ", "Campos dos Goytacazes, RJ", "São João de Meriti, RJ", "Petrópolis, RJ", "Volta Redonda, RJ", "Macaé, RJ", "Cabo Frio, RJ", "Angra dos Reis, RJ", "Itaboraí, RJ", "Nilópolis, RJ", "Queimados, RJ"]
+    },
+    {
+      group: "Minas Gerais — Interior",
+      items: ["Contagem, MG", "Uberlândia, MG", "Juiz de Fora, MG", "Betim, MG", "Montes Claros, MG", "Uberaba, MG", "Ipatinga, MG", "Ribeirão das Neves, MG", "Governador Valadares, MG", "Divinópolis, MG", "Sete Lagoas, MG", "Varginha, MG", "Poços de Caldas, MG", "Patos de Minas, MG", "Barbacena, MG", "Itaúna, MG", "Coronel Fabriciano, MG"]
+    },
+    {
+      group: "Espírito Santo — Interior",
+      items: ["Vila Velha, ES", "Serra, ES", "Cariacica, ES", "Cachoeiro de Itapemirim, ES", "Linhares, ES", "Colatina, ES", "Guarapari, ES"]
+    },
+    {
+      group: "Paraná — Interior",
+      items: ["Londrina, PR", "Maringá, PR", "Foz do Iguaçu, PR", "Cascavel, PR", "Ponta Grossa, PR", "São José dos Pinhais, PR", "Colombo, PR", "Guarapuava, PR", "Paranaguá, PR", "Araucária, PR", "Toledo, PR", "Apucarana, PR", "Pinhais, PR", "Campo Largo, PR"]
+    },
+    {
+      group: "Rio Grande do Sul — Interior",
+      items: ["Caxias do Sul, RS", "Canoas, RS", "Pelotas, RS", "Novo Hamburgo, RS", "Santa Maria, RS", "Gravataí, RS", "São Leopoldo, RS", "Alvorada, RS", "Viamão, RS", "Rio Grande, RS", "Passo Fundo, RS", "Sapucaia do Sul, RS", "Cachoeirinha, RS", "Bagé, RS", "Uruguaiana, RS"]
+    },
+    {
+      group: "Santa Catarina — Interior",
+      items: ["Joinville, SC", "Blumenau, SC", "Itajaí, SC", "São José, SC", "Criciúma, SC", "Chapecó, SC", "Lages, SC", "Palhoça, SC", "Balneário Camboriú, SC", "Jaraguá do Sul, SC", "Brusque, SC", "Araranguá, SC", "Tubarão, SC"]
+    },
+    {
+      group: "Bahia — Interior",
+      items: ["Feira de Santana, BA", "Vitória da Conquista, BA", "Camaçari, BA", "Itabuna, BA", "Juazeiro, BA", "Ilhéus, BA", "Lauro de Freitas, BA", "Barreiras, BA", "Jequié, BA", "Teixeira de Freitas, BA", "Alagoinhas, BA", "Porto Seguro, BA"]
+    },
+    {
+      group: "Ceará — Interior",
+      items: ["Caucaia, CE", "Juazeiro do Norte, CE", "Maracanaú, CE", "Sobral, CE", "Crato, CE", "Itapipoca, CE", "Maranguape, CE", "Iguatu, CE"]
+    },
+    {
+      group: "Pernambuco — Interior",
+      items: ["Caruaru, PE", "Olinda, PE", "Jaboatão dos Guararapes, PE", "Petrolina, PE", "Paulista, PE", "Cabo de Santo Agostinho, PE", "Caruaru, PE", "Camaragibe, PE", "Garanhuns, PE", "Vitória de Santo Antão, PE"]
+    },
+    {
+      group: "Nordeste — Demais Estados",
+      items: ["Campina Grande, PB", "Patos, PB", "Mossoró, RN", "Caicó, RN", "Arapiraca, AL", "Imperatriz, MA", "Caxias, MA", "Parnaíba, PI", "Lagarto, SE", "Estância, SE", "Ananindeua, PA", "Marabá, PA", "Santarém, PA"]
+    },
+    {
+      group: "Goiás e Centro-Oeste — Interior",
+      items: ["Aparecida de Goiânia, GO", "Anápolis, GO", "Rio Verde, GO", "Luziânia, GO", "Itumbiara, GO", "Catalão, GO", "Formosa, GO", "Dourados, MS", "Três Lagoas, MS", "Corumbá, MS", "Várzea Grande, MT", "Sinop, MT", "Rondonópolis, MT", "Tangará da Serra, MT"]
+    },
+    {
+      group: "Norte — Interior",
+      items: ["Santarém, PA", "Marabá, PA", "Parauapebas, PA", "Araguaína, TO", "Ji-Paraná, RO", "Castanhal, PA", "Altamira, PA", "Cruzeiro do Sul, AC", "Santana, AP", "Parintins, AM", "Boa Vista, RR"]
+    },
+    {
+      group: "Nacional",
+      items: ["Brasil"]
+    }
   ];
 
   // SMTP Settings
@@ -156,37 +232,143 @@ export default function App() {
   const [excelExportStatus, setExcelExportStatus] = useState(null); // { exporting, message }
 
   // Filters State
-  const [gridFilters, setGridFilters] = useState({
-    source: 'todos',
-    date: 'todos',
-    hasEmail: false,
-    hasWpp: false,
-    wppSent: false,
-    highOpportunity: false,
-    followupDue: false
-  });
+  const [gridFilters, setGridFilters] = useState(DEFAULT_GRID_FILTERS);
+  const [gridSort, setGridSort] = useState({ col: null, dir: null });
+
+  const cycleSort = (col) => {
+    setGridSort(current => {
+      if (current.col !== col) return { col, dir: 'asc' };
+      if (current.dir === 'asc') return { col, dir: 'desc' };
+      return { col: null, dir: null };
+    });
+  };
+
+  // Meta Diária
+  const [dailyGoal, setDailyGoal] = useState(0);
+  const [weeklyGoal, setWeeklyGoal] = useState(0);
+  const [monthlyGoal, setMonthlyGoal] = useState(0);
+  const [emailSendDelay, setEmailSendDelay] = useState(EMAIL_SEND_DELAY_MS);
+  const [sentTodayCount, setSentTodayCount] = useState(0);
+  const [dailyGoalModal, setDailyGoalModal] = useState(false);
+  const [dailyGoalInput, setDailyGoalInput] = useState('');
+  const [goalReachedModal, setGoalReachedModal] = useState(false);
+
+  const _goalTodayKey = () => new Date().toLocaleDateString('pt-BR');
+  const getGoalHitAt = () => {
+    if (localStorage.getItem('goal_hit_date') !== _goalTodayKey()) return null;
+    const ts = localStorage.getItem('goal_hit_at');
+    return ts ? Number(ts) : null;
+  };
+  const markGoalHit = () => {
+    localStorage.setItem('goal_hit_at', String(Date.now()));
+    localStorage.setItem('goal_hit_date', _goalTodayKey());
+  };
+  const clearGoalHit = () => {
+    localStorage.removeItem('goal_hit_at');
+    localStorage.removeItem('goal_hit_date');
+  };
+  const getGoalCooldownRemaining = () => {
+    const hitAt = getGoalHitAt();
+    if (!hitAt) return 0;
+    return Math.max(0, 3600000 - (Date.now() - hitAt));
+  };
 
   // Details Modal State
   const [leadDetailsModal, setLeadDetailsModal] = useState(null);
+  const [problemsModal, setProblemsModal] = useState(null); // { lead, problems, loading, score, breakdown }
+  const [wppAutoDispatch, setWppAutoDispatch] = useState(false);
+  const [postCaptureWppModal, setPostCaptureWppModal] = useState(null);
+  const [wppPilot, setWppPilot] = useState({
+    active: false,
+    status: 'idle', // 'idle'|'initializing'|'qr-wait'|'running'|'paused'|'done'
+    queue: [],
+    currentIdx: 0,
+    results: [], // [{ lead, status: 'sent'|'skipped'|'error'|'invalid-phone'|'timeout' }]
+  });
+  const wppPilotRef = useRef(null);
+  const wppPilotRunning = useRef(false);
+  const wppPilotPaused = useRef(false); // { phase: 'confirm'|'dispatching'|'done', leads, currentIdx, dispatched, skipped }
   const [leadContacts, setLeadContacts] = useState([]);
   const [manualEmailInput, setManualEmailInput] = useState('');
   const [manualEmailSaving, setManualEmailSaving] = useState(false);
   const [showFixedPhone, setShowFixedPhone] = useState(false);
   const [appDialog, setAppDialog] = useState(null);
   const [layoutGeneratingLeadId, setLayoutGeneratingLeadId] = useState(null);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(null); // ID of lead with open dropdown
+  const [isDropdownOpen, setIsDropdownOpen] = useState(null);
+
+  // Task 2 — Cancelamento de captura
+  const [isCancelling, setIsCancelling] = useState(false);
+
+  // Task 3 — Dashboard stats
+  const [dashboardStats, setDashboardStats] = useState(null);
+
+  // Task 4 — Kanban CRM
+  const [kanbanFilter, setKanbanFilter] = useState('sites');
+
+  // Task 6 — Follow-ups badge
+  const [followupsDueBadge, setFollowupsDueBadge] = useState(0);
+
+  // Task 7 — PDF diagnóstico
+  const [pdfGenerating, setPdfGenerating] = useState(false);
+
+  // Task 9 — Templates de mensagem
+  const [messageTemplates, setMessageTemplates] = useState([]);
+  const [templatesModal, setTemplatesModal] = useState(false);
+  const [templateForm, setTemplateForm] = useState({ id: null, nicho: '', canal: 'whatsapp', has_site: null, nome: '', corpo: '' });
+
+  // T01 — Filtros dashboard
+  const [dashFilters, setDashFilters] = useState({ search: '', source: 'todos', status: 'todos', period: 'todos', opp: 'todos' });
+
+  // T20/T21 — Atalhos e Command Palette
+  const [cmdPalette, setCmdPalette] = useState({ open: false, query: '', results: [] });
+
+  // T23 — Modo compacto
+  const [isCompact, setIsCompact] = useState(false);
+
+  // T24 — Toast
+  const [toast, setToast] = useState(null);
+
+  // T07 — Histórico de e-mails por lead
+  const [emailHistory, setEmailHistory] = useState([]);
+
+  // T13 — Score override
+  const [scoreOverrides, setScoreOverrides] = useState({});
+
+  // T14 — Ticket value
+  const [ticketValues, setTicketValues] = useState({});
+
+  // T18 — PageSpeed
+  const [pageSpeedData, setPageSpeedData] = useState({});
+
+  // T27/T30 — Atividade e saúde do app
+  const [activityLog, setActivityLog] = useState([]);
+  const [appHealth, setAppHealth] = useState(null);
+  const [kanbanNotes, setKanbanNotes] = useState({});
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [selectedLeadKeys, setSelectedLeadKeys] = useState([]);
-  const siteLeadsGrid = sites.filter(lead => !lead.email_enviado && !lead.wpp_enviado);
-  const validatedLeadsGrid = [
-    ...sites.filter(lead => lead.is_validated || lead.email_enviado || lead.wpp_enviado).map(lead => ({ ...lead, _typeCode: 'sites' })),
-    ...sistemas.filter(lead => lead.is_validated || lead.email_enviado || lead.wpp_enviado).map(lead => ({ ...lead, _typeCode: 'sistema' })),
-    ...linkedin.filter(lead => lead.is_validated || lead.email_enviado || lead.wpp_enviado).map(lead => ({ ...lead, _typeCode: 'linkedin' }))
-  ];
-  const whatsappCommercialLeads = validatedLeadsGrid.filter(lead => lead.telefone);
+  const siteLeadsGrid = useMemo(
+    () => sites.filter(lead => !lead.email_enviado && !lead.wpp_enviado),
+    [sites]
+  );
+  const validatedLeadsGrid = useMemo(
+    () => [
+      ...sites.filter(lead => lead.is_validated || lead.email_enviado || lead.wpp_enviado).map(lead => ({ ...lead, _typeCode: 'sites' })),
+      ...sistemas.filter(lead => lead.is_validated || lead.email_enviado || lead.wpp_enviado).map(lead => ({ ...lead, _typeCode: 'sistema' })),
+      ...linkedin.filter(lead => lead.is_validated || lead.email_enviado || lead.wpp_enviado).map(lead => ({ ...lead, _typeCode: 'linkedin' }))
+    ],
+    [sites, sistemas, linkedin]
+  );
+  const whatsappCommercialLeads = useMemo(
+    () => validatedLeadsGrid.filter(lead => lead.telefone),
+    [validatedLeadsGrid]
+  );
   const whatsappUnreadCount = 0;
   const whatsappScheduledCount = 0;
+
+  // Sync wppPilot state into ref para uso em loops assíncronos
+  useEffect(() => { wppPilotRef.current = wppPilot; }, [wppPilot]);
 
   // Reset pagination when changing menu or filters
   useEffect(() => {
@@ -205,6 +387,41 @@ export default function App() {
     if (currentPage > maxPage) setCurrentPage(maxPage);
   }, [activeMenu, siteLeadsGrid.length, sistemas.length, linkedin.length, validatedLeadsGrid.length, itemsPerPage, currentPage]);
 
+  // T24 — Toast helper
+  const showToast = (msg, type = 'success', duration = 3000) => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), duration);
+  };
+
+  // T20 — Atalhos de teclado globais
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setCmdPalette(p => ({ ...p, open: !p.open, query: '', results: [] }));
+        return;
+      }
+      if (e.key === 'Escape') {
+        setCmdPalette(p => ({ ...p, open: false }));
+        return;
+      }
+      if (e.key === 'n' && !e.ctrlKey && !e.metaKey) { setActiveMenu('nova-captura'); return; }
+      if (e.key === 'd' && !e.ctrlKey && !e.metaKey) { setActiveMenu('geral'); return; }
+      if (e.key === 'l' && !e.ctrlKey && !e.metaKey) { setActiveMenu('sites'); return; }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    const goOnline = () => setIsOffline(false);
+    const goOffline = () => setIsOffline(true);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+  }, []);
+
   const handleOpenDetails = async (lead) => {
     setLeadDetailsModal(lead);
     setManualEmailInput('');
@@ -219,6 +436,39 @@ export default function App() {
     } catch (err) {
       console.error('Erro ao buscar contatos:', err);
       setLeadContacts([]);
+    }
+  };
+
+  const handleAnalyzeProblems = async (lead, detailTypeCode) => {
+    const leadUrl = getLeadUrl(lead);
+    if (!leadUrl) {
+      showAppAlert({ title: 'Site não encontrado', message: 'Este lead não possui URL para análise.', variant: 'warning' });
+      return;
+    }
+    const table = detailTypeCode === 'sistema' ? 'leads_sistemas' : detailTypeCode === 'linkedin' ? 'leads_linkedin' : 'leads_sites';
+
+    if (lead.problemas && lead.score_design != null && lead.score_design >= 0) {
+      let rawList = [];
+      try { rawList = JSON.parse(lead.problemas); } catch (e) { rawList = String(lead.problemas).split(/\r?\n/).filter(Boolean); }
+      setProblemsModal({ lead, problems: rawList, loading: false, score: lead.score_design });
+      return;
+    }
+
+    setProblemsModal({ lead, problems: [], loading: true, score: null });
+    try {
+      const formattedUrl = leadUrl.startsWith('http') ? leadUrl : `https://${leadUrl}`;
+      const result = await window.electronAPI.analyzeLeadDesign({ id: lead.id, url: formattedUrl, table });
+      const rawList = result.issues || [];
+      const updatedLead = { ...lead, score_design: result.score, problemas: JSON.stringify(rawList) };
+
+      if (detailTypeCode === 'sites') setSites(c => c.map(s => s.id === lead.id ? { ...s, score_design: result.score, problemas: JSON.stringify(rawList) } : s));
+      else if (detailTypeCode === 'sistema') setSistemas(c => c.map(s => s.id === lead.id ? { ...s, score_design: result.score, problemas: JSON.stringify(rawList) } : s));
+      setLeadDetailsModal(c => c?.id === lead.id ? { ...c, score_design: result.score, problemas: JSON.stringify(rawList) } : c);
+
+      setProblemsModal({ lead: updatedLead, problems: rawList, loading: false, score: result.score });
+    } catch (err) {
+      showAppAlert({ title: 'Erro na análise', message: err.message || 'Não foi possível analisar o site.', variant: 'danger' });
+      setProblemsModal(null);
     }
   };
 
@@ -276,6 +526,38 @@ export default function App() {
   const getLeadName = (lead) => lead?.nome || lead?.titulo || lead?.empresa || 'Responsável';
 
   const getLeadUrl = (lead) => lead?.url || lead?.site_oficial || lead?.developer_site || lead?.app_store_url || '';
+
+  const normalizeSearchText = (value = '') =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
+  const getLeadInsertedAt = (lead) => {
+    const rawDate = lead?.data_coleta || lead?.created_at || lead?.data_ultima_atualizacao || lead?.updated_at || '';
+    const timestamp = rawDate ? new Date(rawDate).getTime() : Number.NaN;
+    return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+  };
+
+  const sortByInsertedAtAsc = (a, b) => {
+    const dateDiff = getLeadInsertedAt(a) - getLeadInsertedAt(b);
+    if (dateDiff !== 0) return dateDiff;
+    return Number(a?.id || 0) - Number(b?.id || 0);
+  };
+
+  const matchesLeadNameQuery = (lead, query) => {
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return true;
+    return normalizeSearchText([
+      lead?.nome,
+      lead?.titulo,
+      lead?.empresa,
+      lead?.developer_name,
+      lead?.url,
+      lead?.site_oficial
+    ].filter(Boolean).join(' ')).includes(normalizedQuery);
+  };
 
   const getLeadCategory = (lead) => {
     const rawCategory = String(lead?.categoria || lead?.nicho || lead?.app_category || '').trim();
@@ -489,6 +771,139 @@ export default function App() {
     return problems.length ? problems : [
       'Visitantes podem sair antes de entender o principal valor da empresa.'
     ];
+  };
+
+  const transformProblemForSales = (rawProblem) => {
+    const text = String(rawProblem || '').toLowerCase();
+    const mappings = [
+      {
+        match: ['fcp', 'carregamento inicial'],
+        icon: 'perf', impact: 'Site demora para carregar — visitantes vão embora antes de ver a empresa',
+        detail: 'Mais de 53% dos usuários abandonam páginas que demoram mais de 3 segundos. Cada segundo a mais significa clientes perdidos para a concorrência.'
+      },
+      {
+        match: ['lcp', 'maior elemento visual'],
+        icon: 'perf', impact: 'Conteúdo principal demora a aparecer na tela',
+        detail: 'O Google penaliza sites com visual lento, reduzindo o posicionamento nas pesquisas e afastando quem chega pela busca.'
+      },
+      {
+        match: ['cls', 'instabilidade no layout'],
+        icon: 'perf', impact: 'Site "pula" enquanto carrega — causa cliques errados e frustração',
+        detail: 'Elementos que se movem durante o carregamento transmitem descuido e fazem o visitante sentir que o site não é confiável.'
+      },
+      {
+        match: ['javascript', 'execução pesada', 'tbt'],
+        icon: 'perf', impact: 'Site trava ou demora a responder no celular',
+        detail: 'Scripts pesados tornam a navegação lenta especialmente em celulares mais simples, que representam a maioria dos acessos no Brasil.'
+      },
+      {
+        match: ['muitos elementos', 'dom'],
+        icon: 'perf', impact: 'Página sobrecarregada prejudica a experiência do visitante',
+        detail: 'Excesso de elementos aumenta o tempo de carregamento em redes móveis e piora a experiência em dispositivos com menos memória.'
+      },
+      {
+        match: ['título da página', 'title'],
+        icon: 'seo', impact: 'Empresa invisível no Google — sem título configurado',
+        detail: 'O título é o primeiro elemento que o Google e o visitante leem. Sem ele, a página não aparece corretamente nas buscas do nicho.'
+      },
+      {
+        match: ['meta description', 'resumo google'],
+        icon: 'seo', impact: 'Google não sabe descrever o negócio — cliques na busca despencam',
+        detail: 'Sem descrição configurada, o Google exibe texto aleatório da página, reduzindo drasticamente o número de pessoas que clicam no resultado.'
+      },
+      {
+        match: ['h1', 'múltiplas tags h1', 'tag h1'],
+        icon: 'seo', impact: 'Estrutura de conteúdo confunde o Google e reduz relevância nas buscas',
+        detail: 'O H1 diz ao Google sobre o que é a página. Sem ele, ou com múltiplos, o site perde relevância para palavras-chave do nicho.'
+      },
+      {
+        match: ['lang', 'atributo'],
+        icon: 'seo', impact: 'Idioma não definido prejudica indexação e acessibilidade',
+        detail: 'O atributo de idioma é verificado pelo Google e por tecnologias assistivas. A ausência impacta tanto o SEO quanto a inclusão.'
+      },
+      {
+        match: ['imagens sem', 'alt text', 'sem descrição'],
+        icon: 'seo', impact: 'Imagens ignoradas pelo Google — conteúdo visual desperdiçado',
+        detail: 'Imagens sem descrição não são indexadas pelo Google e prejudicam a acessibilidade, excluindo usuários com deficiência visual.'
+      },
+      {
+        match: ['https', 'ssl', 'robots', 'indexação'],
+        icon: 'seo', impact: 'Site sem segurança — navegadores alertam visitantes para saírem',
+        detail: 'Chrome e outros navegadores exibem avisos de "site não seguro" quando falta HTTPS, fazendo visitantes abandonarem a página imediatamente.'
+      },
+      {
+        match: ['layout', 'antiquado', 'tabelas', 'floats'],
+        icon: 'design', impact: 'Visual ultrapassado reduz a credibilidade da empresa instantaneamente',
+        detail: 'Pesquisas mostram que 94% das primeiras impressões de um site são baseadas em design. Um visual antigo sinaliza descuido e afasta clientes.'
+      },
+      {
+        match: ['fontes padrão', 'fontes do sistema', 'web font'],
+        icon: 'design', impact: 'Sem identidade visual — empresa parece genérica e pouco profissional',
+        detail: 'Sites sem tipografia própria não transmitem a personalidade da marca. O visitante inconscientemente compara com concorrentes mais modernos.'
+      },
+      {
+        match: ['cta', 'botão de ação', 'nenhum botão'],
+        icon: 'ux', impact: 'Visitantes interessados não sabem como entrar em contato — oportunidades perdidas',
+        detail: 'Sem chamadas claras para ação, o visitante que já tem interesse vai embora sem deixar contato. A conversão simplesmente não acontece.'
+      },
+      {
+        match: ['favicon'],
+        icon: 'ux', impact: 'Sem ícone de marca — site parece inacabado',
+        detail: 'O favicon é percebido como um detalhe de capricho. Sua ausência transmite que o site foi feito sem atenção, o que abala a confiança do visitante.'
+      },
+      {
+        match: ['viewport', 'celular', 'configurado para celular'],
+        icon: 'mobile', impact: 'Site inutilizável em celulares — 70% do tráfego desperdiçado',
+        detail: 'No Brasil, mais de 70% dos acessos à internet vêm de smartphones. Um site sem configuração mobile afasta a maioria do público antes de qualquer interação.'
+      },
+      {
+        match: ['fontes muito pequenas', 'pequenas para telas'],
+        icon: 'mobile', impact: 'Textos ilegíveis no celular — visitante desiste de ler',
+        detail: 'Fontes pequenas em mobile forçam o usuário a dar zoom constantemente. A experiência frustrante leva ao abandono da página em segundos.'
+      },
+      {
+        match: ['clicáveis', 'tap target', 'pequenos ou próximos'],
+        icon: 'mobile', impact: 'Botões difíceis de tocar no celular — erros de clique constantes',
+        detail: 'Alvos de toque pequenos fazem o usuário pressionar o elemento errado repetidamente, gerando frustração e levando ao abandono do site.'
+      },
+      {
+        match: ['lazy', 'sem carregamento lento', 'imagens sem lazy'],
+        icon: 'perf', impact: 'Imagens carregam todas de uma vez — peso desnecessário para o visitante',
+        detail: 'Sem carregamento diferido, o site baixa todas as imagens mesmo as fora da tela. No celular em 4G isso pode triplicar o tempo até a página ser usável.'
+      },
+      {
+        match: ['dimensões', 'sem dimensões', 'width', 'height faltando'],
+        icon: 'perf', impact: 'Layout instável enquanto as imagens carregam — visitante vê conteúdo "pulando"',
+        detail: 'Imagens sem tamanho definido causam refluxo visual (CLS), um dos fatores de penalidade mais pesados do Google para ranqueamento mobile.'
+      },
+      {
+        match: ['formato legado', 'jpg', 'png sem webp', 'formato de imagem'],
+        icon: 'perf', impact: 'Imagens em formato antigo — até 3× mais pesadas que o necessário',
+        detail: 'JPEG e PNG são formatos de 1990. WebP e AVIF entregam a mesma qualidade com até 70% menos tamanho, acelerando drasticamente o carregamento.'
+      },
+      {
+        match: ['css bloqueante', 'folhas de estilo bloqueantes', 'blocking css'],
+        icon: 'perf', impact: 'Página travada enquanto o CSS carrega — visitante fica com tela em branco',
+        detail: 'CSS bloqueante impede o browser de renderizar qualquer conteúdo. O visitante vê uma tela branca por segundos, o que gera abandono imediato.'
+      },
+      {
+        match: ['google fonts', 'fonte bloqueante', 'font-display'],
+        icon: 'perf', impact: 'Fonte do Google travando o carregamento — textos invisíveis até o fim do download',
+        detail: 'Fontes do Google sem font-display:swap deixam todo o texto invisível durante o download. Adicionar esta configuração elimina o travamento visual.'
+      },
+    ];
+
+    for (const { match, icon, impact, detail } of mappings) {
+      if (match.some(keyword => text.includes(keyword))) {
+        return { icon, impact, detail, raw: rawProblem };
+      }
+    }
+    return {
+      icon: 'ux',
+      impact: String(rawProblem).replace(/^[\p{L} ]+:\s*/u, '').trim(),
+      detail: 'Este problema pode estar impactando a experiência do visitante e reduzindo as conversões.',
+      raw: rawProblem
+    };
   };
 
   const summarizeLeadConcern = (problem) => {
@@ -825,37 +1240,181 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     };
 
     try {
-      await window.electronAPI.updateLeadWppStatus(table, lead.id, true);
-      await window.electronAPI.setLeadValidation(table, lead.id, 1);
-      await window.electronAPI.addInteracao(lead.id, leadTypeCode, 'whatsapp', 'Mensagem inicial enviada via WhatsApp pelo CapLead.');
-
+      // Writes independentes em paralelo — evita 4 round-trips IPC sequenciais
+      const dbOps = [
+        window.electronAPI.updateLeadWppStatus(table, lead.id, true),
+        window.electronAPI.setLeadValidation(table, lead.id, 1),
+        window.electronAPI.addInteracao(lead.id, leadTypeCode, 'whatsapp', 'Mensagem inicial enviada via WhatsApp pelo CapLead.'),
+      ];
       if (leadTypeCode !== 'linkedin') {
-        await window.electronAPI.updateLeadFunil(table, lead.id, 'contatado', patch.proximo_passo, addDaysIso(2));
+        dbOps.push(window.electronAPI.updateLeadFunil(table, lead.id, 'contatado', patch.proximo_passo, addDaysIso(2)));
       }
+      await Promise.all(dbOps);
 
       updateWhatsappState(lead.id, leadTypeCode, patch);
-      const syncResult = await syncWhatsappLeadToKentauros({ ...lead, ...patch }, leadTypeCode, sentAt);
       await fetchDashboardData();
 
       if (showSuccess) {
-        const updated = Number(syncResult.updated || 0);
         showAppAlert({
           title: 'WhatsApp registrado',
-          message: updated > 0
-            ? 'Envio confirmado no CapLead e atualizado na Kentauros.'
-            : 'Envio confirmado no CapLead e enviado para a Kentauros.',
+          message: 'Envio confirmado no CapLead.',
           variant: 'success'
         });
       }
+
+      // Sync Kentauros em background — não bloqueia a UI aguardando rede externa
+      syncWhatsappLeadToKentauros({ ...lead, ...patch }, leadTypeCode, sentAt)
+        .then(syncResult => {
+          const updated = Number(syncResult.updated || 0);
+          showToast(updated > 0 ? 'Atualizado na Kentauros.' : 'Enviado para a Kentauros.', 'success');
+        })
+        .catch(error => {
+          if (!error.message?.includes('Kentauros não configurada')) {
+            showToast(`Kentauros: ${error.message}`, 'warning', 6000);
+          }
+        });
+
     } catch (error) {
       await fetchDashboardData();
       showAppAlert({
         title: 'WhatsApp registrado com aviso',
-        message: `O status foi salvo no CapLead, mas a sincronização automática precisa de atenção: ${error.message}`,
+        message: `O status foi salvo no CapLead, mas houve um erro: ${error.message}`,
         variant: 'warning'
       });
     }
   };
+
+  // ─── WhatsApp AutoPilot ───────────────────────────────────────────────────
+  const wppSleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const processNextWppLead = async () => {
+    if (!wppPilotRunning.current) return;
+
+    // Aguarda enquanto pausado
+    while (wppPilotPaused.current && wppPilotRunning.current) {
+      await wppSleep(300);
+    }
+    if (!wppPilotRunning.current) return;
+
+    const pilot = wppPilotRef.current;
+    if (!pilot) return;
+
+    const { queue, currentIdx } = pilot;
+    if (currentIdx >= queue.length) {
+      setWppPilot(p => ({ ...p, status: 'done' }));
+      wppPilotRunning.current = false;
+      return;
+    }
+
+    const lead = queue[currentIdx];
+    const phone = normalizeWhatsappPhone(lead.telefone || '');
+    const message = buildWhatsappMessage(lead);
+
+    if (!phone) {
+      setWppPilot(p => ({
+        ...p,
+        results: [...p.results, { lead, status: 'skipped', error: 'Sem telefone válido' }],
+        currentIdx: p.currentIdx + 1,
+      }));
+      setTimeout(processNextWppLead, 500);
+      return;
+    }
+
+    const result = await window.electronAPI.wppPilotSend(phone, message);
+    if (!wppPilotRunning.current) return;
+
+    if (result.status === 'qr-needed') {
+      setWppPilot(p => ({ ...p, status: 'qr-wait' }));
+      wppPilotRunning.current = false;
+      return;
+    }
+
+    const sent = result.status === 'sent';
+    setWppPilot(p => ({
+      ...p,
+      results: [...p.results, { lead, status: sent ? 'sent' : (result.status || 'error') }],
+      currentIdx: p.currentIdx + 1,
+    }));
+
+    if (sent) {
+      confirmWhatsappSent(lead, lead._typeCode || 'sites', { showSuccess: false }).catch(() => {});
+    }
+
+    if (wppPilotRunning.current) {
+      setTimeout(processNextWppLead, 4500); // 4.5s entre envios
+    }
+  };
+
+  const startWppAutoPilot = async () => {
+    const pendingLeads = whatsappCommercialLeads.filter(l => !l.wpp_enviado && l.telefone);
+    if (!pendingLeads.length) {
+      showAppAlert({ title: 'Fila vazia', message: 'Todos os leads com WhatsApp já foram contatados ou não há leads elegíveis.', variant: 'info' });
+      return;
+    }
+    setWppPilot({ active: true, status: 'initializing', queue: pendingLeads, currentIdx: 0, results: [] });
+    wppPilotRunning.current = true;
+    wppPilotPaused.current = false;
+
+    const init = await window.electronAPI.wppPilotInit();
+    if (!init.success) {
+      setWppPilot({ active: false, status: 'idle', queue: [], currentIdx: 0, results: [] });
+      showAppAlert({ title: 'Erro ao abrir WhatsApp Web', message: init.error || 'Não foi possível iniciar a janela.', variant: 'danger' });
+      return;
+    }
+
+    await wppSleep(4000); // aguarda carregamento inicial
+
+    const check = await window.electronAPI.wppPilotCheck();
+    if (!check.success || check.needsQR || !check.loggedIn) {
+      setWppPilot(p => ({ ...p, status: 'qr-wait' }));
+      return;
+    }
+
+    setWppPilot(p => ({ ...p, status: 'running' }));
+    processNextWppLead();
+  };
+
+  const resumeWppAfterQr = async () => {
+    const check = await window.electronAPI.wppPilotCheck();
+    if (!check.success || check.needsQR || !check.loggedIn) {
+      showToast('WhatsApp ainda não logado. Escaneie o QR Code na janela aberta.', 'warning', 4000);
+      return;
+    }
+    wppPilotRunning.current = true;
+    wppPilotPaused.current = false;
+    setWppPilot(p => ({ ...p, status: 'running' }));
+    processNextWppLead();
+  };
+
+  const pauseWppPilot = () => {
+    wppPilotPaused.current = true;
+    setWppPilot(p => ({ ...p, status: 'paused' }));
+  };
+
+  const resumeWppPilot = () => {
+    wppPilotPaused.current = false;
+    setWppPilot(p => ({ ...p, status: 'running' }));
+  };
+
+  const skipWppLead = () => {
+    setWppPilot(p => {
+      const skipped = p.queue[p.currentIdx];
+      if (!skipped) return p;
+      return {
+        ...p,
+        results: [...p.results, { lead: skipped, status: 'skipped' }],
+        currentIdx: p.currentIdx + 1,
+      };
+    });
+  };
+
+  const stopWppPilot = async () => {
+    wppPilotRunning.current = false;
+    wppPilotPaused.current = false;
+    setWppPilot({ active: false, status: 'idle', queue: [], currentIdx: 0, results: [] });
+    await window.electronAPI.wppPilotStop().catch(() => {});
+  };
+  // ─────────────────────────────────────────────────────────────────────────
 
   const startWhatsappMessageFlow = async (lead, typeCode) => {
     const leadTypeCode = lead._typeCode || typeCode || 'sites';
@@ -955,20 +1514,20 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
   };
 
   const fetchDashboardData = async () => {
+    if (!window.electronAPI) return;
+
     try {
-      const dash = await window.electronAPI.getDashboardMetrics();
+      const [dash, latest, resSites, resSistemas, resLinkedin] = await Promise.all([
+        window.electronAPI.getDashboardMetrics(),
+        window.electronAPI.getLatestAnalyses(),
+        window.electronAPI.getLeadSites(),
+        window.electronAPI.getLeadSistemas(),
+        window.electronAPI.getLeadLinkedin(),
+      ]);
       if (dash.success) setMetrics(dash.data);
-      
-      const latest = await window.electronAPI.getLatestAnalyses();
       if (latest.success) setLatestAnalyses(latest.data);
-
-      const resSites = await window.electronAPI.getLeadSites();
       if (resSites.success) setSites(resSites.data);
-
-      const resSistemas = await window.electronAPI.getLeadSistemas();
       if (resSistemas.success) setSistemas(resSistemas.data);
-
-      const resLinkedin = await window.electronAPI.getLeadLinkedin();
       if (resLinkedin.success) setLinkedin(resLinkedin.data);
     } catch (e) {
       console.error(e);
@@ -976,16 +1535,41 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
   };
 
   const loadConfig = async () => {
+    if (!window.electronAPI) {
+      setShowOnboarding(false);
+      return;
+    }
+
     try {
-      const preset = await window.electronAPI.getConfig('smtp_preset');
-      const host = await window.electronAPI.getConfig('smtp_host');
-      const port = await window.electronAPI.getConfig('smtp_port');
-      const secure = await window.electronAPI.getConfig('smtp_secure');
-      const user = await window.electronAPI.getConfig('smtp_user');
-      const legacyUser = await window.electronAPI.getConfig('gmail_user');
-      const pass = await window.electronAPI.getConfig('gmail_pass'); // Using gmail_pass key based on crud.js
-      const sign = await window.electronAPI.getConfig('smtp_signature');
-      const onboardingDone = await window.electronAPI.getConfig('onboarding_done');
+      const safe = (p) => Promise.resolve(p).catch(() => null);
+
+      // Todas as leituras de config são independentes — executa em paralelo
+      const [
+        preset, host, port, secure, user, legacyUser, pass, sign, onboardingDone,
+        goalVal, weeklyGoalVal, monthlyGoalVal, delayVal, autoWpp,
+        statsData, kRes, statsRes, fRes, tRes
+      ] = await Promise.all([
+        window.electronAPI.getConfig('smtp_preset'),
+        window.electronAPI.getConfig('smtp_host'),
+        window.electronAPI.getConfig('smtp_port'),
+        window.electronAPI.getConfig('smtp_secure'),
+        window.electronAPI.getConfig('smtp_user'),
+        window.electronAPI.getConfig('gmail_user'),
+        window.electronAPI.getConfig('gmail_pass'),
+        window.electronAPI.getConfig('smtp_signature'),
+        window.electronAPI.getConfig('onboarding_done'),
+        window.electronAPI.getConfig('daily_goal'),
+        window.electronAPI.getConfig('weekly_goal'),
+        window.electronAPI.getConfig('monthly_goal'),
+        window.electronAPI.getConfig('email_send_delay'),
+        window.electronAPI.getConfig('wpp_auto_dispatch'),
+        safe(window.electronAPI.getEmailSendStatsToday()),
+        safe(window.electronAPI.getKentaurosConfig?.()),
+        safe(window.electronAPI.getDashboardStats?.()),
+        safe(window.electronAPI.getFollowupsDue?.()),
+        safe(window.electronAPI.getMessageTemplates?.()),
+      ]);
+
       const selectedPreset = preset?.valor || 'gmail';
       const presetConfig = SMTP_PRESETS[selectedPreset] || SMTP_PRESETS.gmail;
 
@@ -1000,21 +1584,67 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       });
       setShowOnboarding(onboardingDone?.valor !== '1' && !pass?.valor);
 
-      if (window.electronAPI?.getKentaurosConfig) {
-        const kRes = await window.electronAPI.getKentaurosConfig();
-        if (kRes?.success && kRes.config) {
-          setKentaurosConfig(prev => ({
-            ...prev,
-            url: kRes.config.url || prev.url,
-            enabled: kRes.config.enabled ?? prev.enabled,
-            tenantId: kRes.config.tenantId || prev.tenantId,
-            userId: kRes.config.userId || prev.userId,
-          }));
-        }
+      setDailyGoal(Number(goalVal?.valor || 0));
+      setWeeklyGoal(Number(weeklyGoalVal?.valor || 0));
+      setMonthlyGoal(Number(monthlyGoalVal?.valor || 0));
+      if (delayVal?.valor) setEmailSendDelay(Number(delayVal.valor));
+      setWppAutoDispatch(autoWpp?.valor === '1');
+
+      setSentTodayCount(statsData?.success ? Number(statsData.data?.sentToday || 0) : 0);
+
+      if (kRes?.success && kRes.config) {
+        setKentaurosConfig(prev => ({
+          ...prev,
+          url: kRes.config.url || prev.url,
+          enabled: kRes.config.enabled ?? prev.enabled,
+          tenantId: kRes.config.tenantId || prev.tenantId,
+          userId: kRes.config.userId || prev.userId,
+        }));
       }
+
+      if (statsRes?.success) setDashboardStats(statsRes.data);
+      if (fRes?.success) setFollowupsDueBadge((fRes.data || []).length);
+      if (tRes?.success) setMessageTemplates(tRes.data || []);
+
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handlePostCaptureWppAction = async (action) => {
+    if (!postCaptureWppModal || postCaptureWppModal.phase !== 'dispatching') return;
+    const { leads, currentIdx, dispatched, skipped } = postCaptureWppModal;
+    const lead = leads[currentIdx];
+
+    if (action === 'send') {
+      try {
+        await Promise.all([
+          window.electronAPI.updateLeadWppStatus('leads_sites', lead.id, true),
+          window.electronAPI.setLeadValidation('leads_sites', lead.id, 1),
+          window.electronAPI.addInteracao(lead.id, 'sites', 'whatsapp', 'Mensagem enviada via disparo automático do CapLead.'),
+          window.electronAPI.updateLeadFunil('leads_sites', lead.id, 'contatado', 'Acompanhar retorno no WhatsApp', addDaysIso(2)),
+        ]);
+        setSites(c => c.map(s => s.id === lead.id ? { ...s, wpp_enviado: 1, is_validated: 1 } : s));
+        syncWhatsappLeadToKentauros(lead, 'sites', new Date().toISOString()).catch(() => {});
+      } catch (err) {
+        console.warn('[AutoWpp] Erro ao marcar lead:', err.message);
+      }
+    }
+
+    const nextDispatched = action === 'send' ? dispatched + 1 : dispatched;
+    const nextSkipped = action === 'skip' ? skipped + 1 : skipped;
+    const nextIdx = currentIdx + 1;
+
+    if (nextIdx >= leads.length) {
+      setPostCaptureWppModal(prev => ({ ...prev, phase: 'done', dispatched: nextDispatched, skipped: nextSkipped }));
+    } else {
+      setPostCaptureWppModal(prev => ({ ...prev, currentIdx: nextIdx, dispatched: nextDispatched, skipped: nextSkipped }));
+    }
+  };
+
+  const toggleWppAutoDispatch = async (val) => {
+    setWppAutoDispatch(val);
+    await window.electronAPI.setConfig('wpp_auto_dispatch', val ? '1' : '0');
   };
 
   const persistKentaurosConfig = async (nextConfig) => {
@@ -1033,7 +1663,8 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
     if (window.electronAPI && window.electronAPI.onDbUpdate) {
       window.electronAPI.onDbUpdate(() => {
-        fetchDashboardData();
+        if (dbUpdateDebounceRef.current) clearTimeout(dbUpdateDebounceRef.current);
+        dbUpdateDebounceRef.current = setTimeout(() => fetchDashboardData(), 300);
       });
     }
 
@@ -1049,9 +1680,15 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     }
   }, []);
 
+  const handleCancelCapture = async () => {
+    setIsCancelling(true);
+    try { await window.electronAPI.cancelSearch?.(); } catch (_) {}
+  };
+
   const handleCaptureSubmit = async (e) => {
     e.preventDefault();
     if (!captureForm.nicho) return;
+    setIsCancelling(false);
     const requestedLimit = Math.min(CAPTURE_MAX_LIMIT, Math.max(CAPTURE_MIN_LIMIT, Number(captureForm.limit) || DEFAULT_CAPTURE_LIMIT));
     const normalizedCaptureForm = { ...captureForm, limit: requestedLimit };
     const contactLabel = getCaptureContactLabel(normalizedCaptureForm);
@@ -1062,7 +1699,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       percent: 3,
       currentLead: ''
     });
-    
+
     try {
       let res;
       if (normalizedCaptureForm.tipo === 'linkedin') {
@@ -1078,13 +1715,9 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         const targetCount = Number(res.target || requestedLimit);
         if (normalizedCaptureForm.tipo === 'sites') {
           setGridFilters({
-            source: 'todos',
-            date: 'todos',
+            ...DEFAULT_GRID_FILTERS,
             hasEmail: Boolean(normalizedCaptureForm.requireEmail),
-            hasWpp: Boolean(normalizedCaptureForm.requireWhatsapp),
-            wppSent: false,
-            highOpportunity: false,
-            followupDue: false
+            hasWpp: Boolean(normalizedCaptureForm.requireWhatsapp)
           });
           setActiveMenu('sites');
         }
@@ -1105,6 +1738,13 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
           currentLead: ''
         });
         await fetchDashboardData();
+
+        if (wppAutoDispatch && normalizedCaptureForm.tipo === 'sites') {
+          const withPhone = (res.data || []).filter(l => l.telefone && !l.wpp_enviado);
+          if (withPhone.length > 0) {
+            setPostCaptureWppModal({ phase: 'confirm', leads: withPhone, currentIdx: 0, dispatched: 0, skipped: 0 });
+          }
+        }
       } else {
         setCaptureStatus({ status: 'error', message: res.error || 'Erro na captura.' });
       }
@@ -1254,6 +1894,48 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     const table = type === 'sistema' ? 'leads_sistemas' : type === 'linkedin' ? 'leads_linkedin' : 'leads_sites';
     await window.electronAPI.blockLead(table, lead.id, true);
     fetchDashboardData();
+  };
+
+  const handleBulkDeleteSelected = (leads, typeCode) => {
+    const items = Array.isArray(leads) ? leads : [];
+    if (!items.length) return;
+
+    showAppConfirm({
+      title: 'Excluir leads selecionados?',
+      message: `Serão removidos ${items.length} lead(s) selecionado(s) desta tela. Esta ação oculta os leads do grid e mantém a base organizada.`,
+      variant: 'danger',
+      confirmLabel: `Excluir ${items.length}`,
+      cancelLabel: 'Cancelar',
+      onConfirm: async () => {
+        setBulkProgress({ total: items.length, current: 0, text: 'Excluindo leads selecionados...' });
+        let success = 0;
+        let error = 0;
+
+        for (let index = 0; index < items.length; index++) {
+          const lead = items[index];
+          const rowTypeCode = lead._typeCode || typeCode;
+          const table = rowTypeCode === 'sistema' ? 'leads_sistemas' : rowTypeCode === 'linkedin' ? 'leads_linkedin' : 'leads_sites';
+          setBulkProgress({ total: items.length, current: index + 1, text: `Excluindo: ${getLeadName(lead)}` });
+          try {
+            const res = await window.electronAPI.blockLead(table, lead.id, true);
+            if (res?.success === false) error++;
+            else success++;
+          } catch (err) {
+            console.error('Erro ao excluir lead em lote:', err);
+            error++;
+          }
+        }
+
+        setBulkProgress(null);
+        setSelectedLeadKeys([]);
+        await fetchDashboardData();
+        showAppAlert({
+          title: 'Exclusão em lote concluída',
+          message: `${success} lead(s) excluído(s)${error ? `, ${error} falha(s)` : ''}.`,
+          variant: error ? 'warning' : 'success'
+        });
+      }
+    });
   };
 
   // === CRM MODAL CONSTANTS & HANDLERS ===
@@ -1437,6 +2119,23 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       sentToday = 0;
     }
 
+    setSentTodayCount(sentToday);
+
+    // Verificar meta diária
+    if (dailyGoal > 0 && sentToday >= dailyGoal) {
+      if (!getGoalHitAt()) markGoalHit();
+      const cooldown = getGoalCooldownRemaining();
+      if (cooldown > 0) {
+        const mins = Math.ceil(cooldown / 60000);
+        showAppAlert({
+          title: '🎯 Meta diária atingida',
+          message: `Você já enviou ${sentToday} e-mail(s) hoje — meta de ${dailyGoal} atingida! Para exceder a meta, aguarde mais ${mins} minuto(s).`,
+          variant: 'warning'
+        });
+        return;
+      }
+    }
+
     const dailyRemaining = Math.max(0, EMAIL_SAFE_DAILY_LIMIT - sentToday);
     const allowedNow = Math.min(dailyRemaining, EMAIL_SAFE_BATCH_LIMIT);
     if (allowedNow <= 0) {
@@ -1470,7 +2169,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
   const confirmBulkEmail = async () => {
     if (!emailPreviewModal) return;
-    const { leads, typeCode, template, skippedWithoutEmail = 0 } = emailPreviewModal;
+    const { leads, typeCode, template, skippedWithoutEmail = 0, emailOverride } = emailPreviewModal;
     
     setEmailPreviewModal(null);
     bulkCancelRef.current = false;
@@ -1483,22 +2182,29 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     for (let i = 0; i < leads.length; i++) {
       if (bulkCancelRef.current) break; // Cancelamento solicitado
       const lead = leads[i];
-      setBulkProgress({ total: leads.length, current: i + 1, text: `Enviando e-mail para: ${lead.email}` });
+      const isSingleLead = leads.length === 1;
+      const emailTo = isSingleLead ? (emailOverride?.trim() || lead.email) : lead.email;
+      setBulkProgress({ total: leads.length, current: i + 1, text: `Enviando e-mail para: ${emailTo}` });
       try {
-        const isSingleLead = leads.length === 1;
         const assunto = isSingleLead ? resolveEmailText(template.assunto, lead) : buildEmailSubject(lead);
         const corpo = isSingleLead ? resolveEmailText(template.corpo, lead) : buildEmailBody(lead);
-        
-        const res = await window.electronAPI.sendEmail(lead.email, assunto, buildEmailHtml(corpo, lead), emailAttachments);
+
+        const res = await window.electronAPI.sendEmail(emailTo, assunto, buildEmailHtml(corpo, lead), emailAttachments);
         if (res.success) {
           const leadTypeCode = lead._typeCode || typeCode;
           const table = leadTypeCode === 'sistema' ? 'leads_sistemas' : leadTypeCode === 'linkedin' ? 'leads_linkedin' : 'leads_sites';
-          await window.electronAPI.updateLeadEmailStatus(table, lead.id, 1);
-          await window.electronAPI.setLeadValidation(table, lead.id, 1);
-          await window.electronAPI.addInteracao(lead.id, leadTypeCode, 'email', 'E-mail consultivo enviado pelo CapLead.');
+          const emailOps = [
+            window.electronAPI.updateLeadEmailStatus(table, lead.id, 1),
+            window.electronAPI.setLeadValidation(table, lead.id, 1),
+            window.electronAPI.addInteracao(lead.id, leadTypeCode, 'email', 'E-mail consultivo enviado pelo CapLead.'),
+            window.electronAPI.addEmailHistory?.(lead.id, leadTypeCode === 'sites' ? 'sites' : 'sistema', emailTo, assunto, corpo.slice(0, 200)),
+            window.electronAPI.logActivity?.('email', `E-mail enviado para ${emailTo}`, { leadId: lead.id, leadType: leadTypeCode }),
+          ];
           if (leadTypeCode !== 'linkedin') {
-            await window.electronAPI.updateLeadFunil(table, lead.id, 'contatado', 'Acompanhar retorno do e-mail enviado', addDaysIso(3));
+            emailOps.push(window.electronAPI.updateLeadFunil(table, lead.id, 'contatado', 'Acompanhar retorno do e-mail enviado', addDaysIso(3)));
           }
+          await Promise.all(emailOps);
+          setEmailHistory(prev => [{ lead_id: lead.id, lead_tipo: leadTypeCode, to_email: emailTo, subject: assunto, sent_at: new Date().toISOString() }, ...prev]);
           if (leadTypeCode === 'sites') {
             setSites(current => current.map(item => item.id === lead.id ? { ...item, email_enviado: 1, is_validated: 1, funil_status: 'contatado', proximo_passo: 'Acompanhar retorno do e-mail enviado', followup_date: addDaysIso(3) } : item));
           } else if (leadTypeCode === 'sistema') {
@@ -1514,8 +2220,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         console.error("Erro no envio", e);
         errorCount++;
       }
-      // Delay conservador entre envios para reduzir risco de throttling no Gmail/SMTP.
-      await new Promise(r => setTimeout(r, EMAIL_SEND_DELAY_MS));
+      await new Promise(r => setTimeout(r, Math.max(EMAIL_SEND_DELAY_MIN, Math.min(EMAIL_SEND_DELAY_MAX, emailSendDelay))));
     }
     setBulkProgress(null);
     const wasCancelled = bulkCancelRef.current;
@@ -1523,6 +2228,19 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     setBulkSummary({ type: 'email', success: successCount, error: errorCount, total: leads.length, skipped: skippedWithoutEmail, cancelled: wasCancelled });
     fetchDashboardData();
     setTimeout(() => setBulkSummary(null), 8000);
+
+    // Atualizar contador de enviados hoje e verificar meta
+    if (successCount > 0) {
+      try {
+        const stats = await window.electronAPI.getEmailSendStatsToday();
+        const newSentToday = stats?.success ? Number(stats.data?.sentToday || 0) : 0;
+        setSentTodayCount(newSentToday);
+        if (dailyGoal > 0 && newSentToday >= dailyGoal && !getGoalHitAt()) {
+          markGoalHit();
+          setGoalReachedModal(true);
+        }
+      } catch (_) {}
+    }
   };
 
   const handleSmartEmailQueue = async () => {
@@ -1737,25 +2455,25 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
   const openOperationalQueue = (queue) => {
     if (queue === 'high') {
-      setGridFilters({ source: 'todos', date: 'todos', hasEmail: false, hasWpp: false, wppSent: false, highOpportunity: true, followupDue: false });
+      setGridFilters({ ...DEFAULT_GRID_FILTERS, highOpportunity: true });
       setWppFilter(false);
       setActiveMenu('sites');
       return;
     }
     if (queue === 'email') {
-      setGridFilters({ source: 'todos', date: 'todos', hasEmail: true, hasWpp: false, wppSent: false, highOpportunity: false, followupDue: false });
+      setGridFilters({ ...DEFAULT_GRID_FILTERS, hasEmail: true });
       setWppFilter(false);
       setActiveMenu('sites');
       return;
     }
     if (queue === 'validated') {
-      setGridFilters({ source: 'todos', date: 'todos', hasEmail: false, hasWpp: false, wppSent: false, highOpportunity: false, followupDue: false });
+      setGridFilters(DEFAULT_GRID_FILTERS);
       setWppFilter(false);
       setActiveMenu('validados');
       return;
     }
     if (queue === 'followups') {
-      setGridFilters({ source: 'todos', date: 'todos', hasEmail: false, hasWpp: false, wppSent: false, highOpportunity: false, followupDue: true });
+      setGridFilters({ ...DEFAULT_GRID_FILTERS, followupDue: true });
       setWppFilter(false);
       setActiveMenu('validados');
       return;
@@ -1877,69 +2595,84 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
   const renderSidebar = () => {
     const menuSections = [
       {
-        title: "CENTRAL DE COMANDO",
+        title: "Central de comando",
         items: [
           { id: 'geral', name: 'Dashboard', icon: <LayoutDashboard size={18} /> },
         ]
       },
       {
-        title: "ÁREA LEAD HUNTER",
+        title: "Área Lead Hunter",
         items: [
           { id: 'nova-captura', name: 'Nova Captura', icon: <Search size={18} /> },
-          { id: 'sites', name: 'Leads de Sites', icon: <Layers size={18} /> },
+          { id: 'sites', name: 'Banco de Sites', icon: <Layers size={18} /> },
           { id: 'sistemas', name: 'Sistemas & Apps', icon: <LayoutTemplate size={18} /> },
-          { id: 'linkedin', name: 'Leads do LinkedIn', icon: <Linkedin size={18} /> },
+          { id: 'linkedin', name: 'LinkedIn', icon: <Linkedin size={18} /> },
         ]
       },
       {
-        title: "COMERCIAL",
+        title: "Comercial",
         items: [
+          { id: 'validados', name: 'Leads Validados', icon: <CheckCircle size={18} /> },
+          { id: 'crm', name: 'CRM', icon: <History size={18} />, badge: followupsDueBadge || undefined },
+          { id: 'kanban', name: 'Pipeline Kanban', icon: <Layers size={18} /> },
+          { id: 'propostas', name: 'Propostas', icon: <FileCheck size={18} /> },
           {
             id: 'whatsapp-comercial',
-            name: 'WhatsApp Business',
+            name: 'WhatsApp',
             icon: <MessageCircle size={18} />,
             badge: whatsappUnreadCount
           },
         ]
       },
       {
-        title: "CRM & OPERACIONAL",
+        title: "Sistema",
         items: [
-          { id: 'validados', name: 'Leads Validados', icon: <CheckCircle size={18} /> },
           { id: 'envios', name: 'Configurações', icon: <Settings size={18} /> }
         ]
       }
     ];
 
     return (
-      <aside className="w-72 bg-dark border-r border-white/5 h-full flex flex-col relative z-20">
-        <div className="p-8 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-emerald-400 flex items-center justify-center shadow-lg shadow-primary/20">
-            <Target className="text-white" size={20} />
+      <>
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/70 lg:hidden"
+        />
+      )}
+      <aside className={`premium-sidebar ${mobileSidebarOpen ? 'open' : ''}`}>
+        <div className="flex items-center gap-3 px-2 pb-4">
+          <div className="brand-mark">
+            <Target className="relative z-10 text-blue-100" size={23} />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-white tracking-tight">
-              CapLead <span className="text-primary">AI</span>
+            <h1 className="font-display text-base font-extrabold text-white leading-tight">
+              CapLead AI
             </h1>
-            <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">Prospector</p>
+            <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-[0.16em]">Prospector</p>
           </div>
         </div>
         
         <nav className="flex-1 overflow-y-auto custom-scrollbar px-4 space-y-8">
           {menuSections.map((section, idx) => (
             <div key={idx}>
-              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 px-3">
+              <h3 className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.12em] mb-2 px-3">
                 {section.title}
               </h3>
               <div className="space-y-1">
                 {section.items.map((m) => (
                   <button 
                     key={m.id}
-                    onClick={() => setActiveMenu(m.id)}
-                    className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                    onClick={() => {
+                      setActiveMenu(m.id);
+                      setMobileSidebarOpen(false);
+                    }}
+                    className={`premium-nav-item flex items-center gap-3 w-full px-3 py-2.5 text-sm font-semibold ${
                       activeMenu === m.id 
-                        ? 'bg-primary/10 text-primary border border-primary/20 shadow-sm' 
-                        : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                        ? 'active' 
+                        : ''
                     }`}
                   >
                     {m.icon}
@@ -1960,14 +2693,13 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
         {/* SMTP Status Widget */}
         <div className="p-4 mt-auto">
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center justify-between">
+          <div className="premium-panel p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="relative">
                 <div className={`w-3 h-3 rounded-full ${smtpStatus?.type === 'success' || smtpConfig.user ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
-                <div className={`absolute inset-0 rounded-full animate-ping opacity-50 ${smtpStatus?.type === 'success' || smtpConfig.user ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
               </div>
               <div className="overflow-hidden">
-                <p className="text-xs font-bold text-white">STATUS SMTP</p>
+                <p className="text-xs font-bold text-white">Status SMTP</p>
                 <p className="text-[10px] text-slate-400 truncate max-w-[120px]">
                   {smtpConfig.user || 'Não configurado'}
                 </p>
@@ -1982,217 +2714,376 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
           </div>
         </div>
       </aside>
+      </>
     );
   };
 
-  const renderDashboard = () => (
-    <div className="p-8 animate-fade-in h-full overflow-y-auto custom-scrollbar bg-surface">
-      <div className="flex justify-between items-start mb-8">
-        <div>
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">CONTROL CENTER &mdash; {new Date().toLocaleDateString('pt-BR')}</h2>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Painel de Operações</h1>
-          <p className="text-slate-400 text-sm mt-2">Acompanhe as métricas de prospecção e os fluxos de automação em tempo real.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowOnboarding(true)}
-            className="bg-primary/10 hover:bg-primary/20 text-primary px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 border border-primary/20"
-          >
-            <Info size={16} /> Guia rápido
-          </button>
-          <button 
-            onClick={handleTotalReset}
-            className="bg-white/5 hover:bg-white/10 text-slate-300 px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 border border-white/5"
-          >
-            <Activity size={16} /> Reset System Data
-          </button>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-        <div className="bg-[#0b1120] p-6 rounded-3xl border border-white/5 relative overflow-hidden group hover:border-white/10 transition-colors">
-          <div className="absolute -right-6 -top-6 text-white/5 group-hover:text-blue-500/5 transition-colors">
-            <Users size={120} />
-          </div>
-          <div className="relative z-10">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center mb-4">
-              <Users size={20} />
-            </div>
-            <span className="text-slate-400 font-bold text-xs uppercase tracking-wider mb-1 block">Total de Leads</span>
-            <div className="flex items-end gap-3">
-              <span className="text-5xl font-black text-white tracking-tight">{metrics.totalLeads}</span>
-              <span className="text-emerald-400 text-sm font-bold bg-emerald-500/10 px-2 py-1 rounded-lg mb-1">+12%</span>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-[#0b1120] p-6 rounded-3xl border border-white/5 relative overflow-hidden group hover:border-white/10 transition-colors">
-          <div className="absolute -right-6 -top-6 text-white/5 group-hover:text-emerald-400/5 transition-colors">
-            <Search size={120} />
-          </div>
-          <div className="relative z-10">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mb-4">
-              <Search size={20} />
-            </div>
-            <span className="text-slate-400 font-bold text-xs uppercase tracking-wider mb-1 block">Varreduras IA (Hoje)</span>
-            <div className="flex items-end gap-3">
-              <span className="text-5xl font-black text-white tracking-tight">{metrics.analyzedToday}</span>
-              <span className="text-emerald-400 text-sm font-bold bg-emerald-500/10 px-2 py-1 rounded-lg mb-1">Ativo</span>
-            </div>
-          </div>
-        </div>
+  const renderDashboard = () => {
+    const totalValidated = validatedLeadsGrid.length;
+    const emailsFound = sites.filter(lead => lead.has_email_count > 0 || lead.email).length
+      + sistemas.filter(lead => lead.email || lead.developer_email).length;
+    const followupsDue = validatedLeadsGrid.filter(isFollowupDue).length;
+    const enriched = sites.filter(lead => lead.has_email_count > 0 || lead.has_phone_count > 0 || lead.telefone).length;
+    const approached = validatedLeadsGrid.filter(lead => lead.email_enviado || lead.wpp_enviado).length;
+    const responded = validatedLeadsGrid.filter(lead => lead.respondeu_email || lead.retorno_wpp).length;
+    const converted = validatedLeadsGrid.filter(lead => lead.funil_status === 'fechado').length;
+    const highOpportunity = [...siteLeadsGrid, ...sistemas].filter(lead => getCommercialScore(lead, lead._typeCode || 'sites') >= 78).length;
+    const conversionRate = metrics.totalLeads ? Math.round((converted / Math.max(metrics.totalLeads, 1)) * 1000) / 10 : 0;
 
-        <div className="bg-[#0b1120] p-6 rounded-3xl border border-white/5 relative overflow-hidden group hover:border-white/10 transition-colors">
-          <div className="absolute -right-6 -top-6 text-white/5 group-hover:text-amber-400/5 transition-colors">
-            <Mail size={120} />
-          </div>
-          <div className="relative z-10">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center mb-4">
-              <Mail size={20} />
-            </div>
-            <span className="text-slate-400 font-bold text-xs uppercase tracking-wider mb-1 block">Propostas Enviadas</span>
-            <div className="flex items-end gap-3">
-              <span className="text-5xl font-black text-white tracking-tight">0</span>
-              <span className="text-slate-500 text-sm font-bold mb-1">Esta semana</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-10 rounded-3xl border border-primary/20 bg-primary/10 p-6">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+    return (
+      <div className="animate-fade-in space-y-5">
+        <header className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
           <div>
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <Activity size={18} className="text-primary" /> Fluxo assistido
-            </h3>
-            <p className="text-slate-300 text-sm mt-1 max-w-3xl">
-              Executa uma rotina segura para o dia: analisa leads pendentes, tenta capturar e-mails, prioriza oportunidades e abre a fila pronta para revisão antes do envio.
-            </p>
-            {automationSummary && (
-              <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-bold">
-                <span className="px-3 py-1.5 rounded-xl bg-white/10 text-slate-200">Analisados: {automationSummary.analyzed}</span>
-                <span className="px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-300">E-mails capturados: {automationSummary.capturedEmails}</span>
-                <span className="px-3 py-1.5 rounded-xl bg-primary/20 text-primary">Prontos para envio: {automationSummary.ready}</span>
-                {automationSummary.failed > 0 && <span className="px-3 py-1.5 rounded-xl bg-red-500/15 text-red-300">Falhas: {automationSummary.failed}</span>}
+            <p className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.13em] mb-2">Control center &mdash; {new Date().toLocaleDateString('pt-BR')}</p>
+            <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Painel de Operações</h1>
+            <p className="text-slate-400 text-sm mt-2 max-w-3xl">Resumo da prospecção, oportunidades e automações em andamento.</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button onClick={() => setShowOnboarding(true)} className="premium-btn">
+              <Info size={16} /> Guia rápido
+            </button>
+            <button onClick={() => setActiveMenu('nova-captura')} className="premium-btn primary">
+              <Search size={16} /> Nova captura
+            </button>
+          </div>
+        </header>
+
+        <section className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-4">
+          {[
+            { label: 'Total de Leads', value: metrics.totalLeads, note: 'Base capturada', badge: '+12%', icon: <Users size={18} />, badgeClass: 'success' },
+            { label: 'Leads Validados', value: totalValidated, note: 'Prontos para abordagem', badge: `${metrics.totalLeads ? Math.round((totalValidated / metrics.totalLeads) * 100) : 0}%`, icon: <CheckCircle size={18} />, badgeClass: 'success' },
+            { label: 'E-mails Encontrados', value: emailsFound, note: 'Disparos preparados', badge: 'Fila', icon: <Mail size={18} />, badgeClass: 'primary' },
+            { label: 'Follow-ups Pendentes', value: followupsDue, note: 'Aguardam retorno', badge: followupsDue > 0 ? 'Hoje' : 'Em dia', icon: <Clock size={18} />, badgeClass: followupsDue > 0 ? 'danger' : 'success' }
+          ].map(card => (
+            <article key={card.label} className="premium-card p-5 min-h-[154px] grid content-start gap-4">
+              <div className="flex items-start justify-between gap-4">
+                <span className="text-xs font-extrabold text-slate-400 uppercase tracking-[0.06em]">{card.label}</span>
+                <span className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/30 text-blue-300 grid place-items-center">{card.icon}</span>
+              </div>
+              <div className="text-4xl font-extrabold text-white leading-none">{card.value}</div>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-slate-400 text-xs">{card.note}</p>
+                <span className={`premium-badge ${card.badgeClass}`}>{card.badge}</span>
+              </div>
+            </article>
+          ))}
+        </section>
+
+        <section className="premium-panel p-6 border-primary/25 bg-[linear-gradient(135deg,rgba(59,130,246,0.12),transparent_46%),rgba(17,24,39,0.92)]">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+            <div>
+              <span className="premium-badge primary">Rotina recomendada para hoje</span>
+              <h2 className="text-xl font-extrabold mt-3 mb-2">Analise leads pendentes, valide contatos e prepare abordagens antes do envio.</h2>
+              <p className="text-slate-400 text-sm max-w-3xl">A fila sugere começar por oportunidades acima de 78 pontos, revisar contatos sem WhatsApp e separar follow-ups vencidos.</p>
+              {automationSummary && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <span className="premium-badge">Analisados: {automationSummary.analyzed}</span>
+                  <span className="premium-badge success">E-mails capturados: {automationSummary.capturedEmails}</span>
+                  <span className="premium-badge primary">Prontos: {automationSummary.ready}</span>
+                  {automationSummary.failed > 0 && <span className="premium-badge danger">Falhas: {automationSummary.failed}</span>}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 shrink-0">
+              <button onClick={handleDailyAssistedAutomation} disabled={bulkProgress !== null} className="premium-btn primary disabled:opacity-50">
+                <Zap size={18} /> Iniciar rotina
+              </button>
+              <button onClick={() => openOperationalQueue('followups')} className="premium-btn">
+                <Clock size={18} /> Ver follow-ups
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <article className="premium-panel p-6 xl:col-span-2">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-xl font-extrabold">Funil de Prospecção</h2>
+                <p className="text-slate-400 text-sm mt-1">Da captura ao fechamento, com leitura operacional rápida.</p>
+              </div>
+              <span className="premium-badge success">Conversão {conversionRate}%</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-3">
+              {[
+                ['Capturados', metrics.totalLeads],
+                ['Validados', totalValidated],
+                ['Enriquecidos', enriched],
+                ['Abordados', approached],
+                ['Responderam', responded],
+                ['Convertidos', converted]
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-2xl border border-border bg-surface-hover/70 p-4 min-h-[104px]">
+                  <strong className="block text-white text-2xl font-extrabold leading-none">{value}</strong>
+                  <span className="block text-slate-400 text-xs mt-2">{label}</span>
+                </div>
+              ))}
+            </div>
+          </article>
+          <article className="premium-panel p-6 flex flex-col gap-4">
+            {(() => {
+              const goalSet = dailyGoal > 0;
+              const pct = goalSet ? Math.min(100, Math.round((sentTodayCount / dailyGoal) * 100)) : 0;
+              const reached = goalSet && sentTodayCount >= dailyGoal;
+              const cooldown = reached ? getGoalCooldownRemaining() : 0;
+              const cooldownMins = Math.ceil(cooldown / 60000);
+              const exceeding = reached && cooldown === 0 && sentTodayCount > dailyGoal;
+              return (
+                <>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-xl font-extrabold">Meta Diária</h2>
+                      <p className="text-slate-400 text-xs mt-1">Controle de ritmo de prospecção</p>
+                    </div>
+                    {!reached && <span className="premium-badge primary">{goalSet ? `${sentTodayCount}/${dailyGoal}` : 'Sem meta'}</span>}
+                    {reached && cooldown > 0 && <span className="premium-badge warning">⏱ {cooldownMins}min</span>}
+                    {reached && cooldown === 0 && <span className="premium-badge success">Excedendo</span>}
+                  </div>
+
+                  {goalSet ? (
+                    <>
+                      <div>
+                        <div className="flex justify-between text-xs text-slate-400 mb-1.5">
+                          <span>{sentTodayCount} enviados</span>
+                          <span>meta: {dailyGoal}</span>
+                        </div>
+                        <div className="h-3 rounded-full bg-slate-700/50 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-gradient-to-r from-emerald-400 to-emerald-300' : 'bg-gradient-to-r from-primary to-blue-400'}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-slate-500 mt-2">
+                          {reached && cooldown > 0 && `⏳ Aguarde ${cooldownMins}min para exceder a meta.`}
+                          {reached && cooldown === 0 && exceeding && `✅ Meta superada. Bom trabalho!`}
+                          {reached && cooldown === 0 && !exceeding && `🎯 Meta atingida! Pode continuar enviando.`}
+                          {!reached && `${Math.max(0, dailyGoal - sentTodayCount)} envio(s) restantes para a meta.`}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-slate-400 text-sm leading-relaxed flex-1">Defina uma meta de envios para acompanhar seu ritmo e proteger a reputação do e-mail.</p>
+                  )}
+
+                  {(weeklyGoal > 0 || monthlyGoal > 0) && (() => {
+                    const last7 = dashboardStats?.dailyLeads?.slice(-7) || [];
+                    const last30 = dashboardStats?.dailyLeads?.slice(-30) || [];
+                    const weekCount = last7.reduce((a, d) => a + d.count, 0);
+                    const monthCount = last30.reduce((a, d) => a + d.count, 0);
+                    return (
+                      <div className="space-y-2">
+                        {weeklyGoal > 0 && (
+                          <div>
+                            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                              <span>Semanal: {weekCount}</span><span>meta: {weeklyGoal}</span>
+                            </div>
+                            <div className="h-1.5 rounded-full bg-slate-700/50 overflow-hidden">
+                              <div className="h-full rounded-full bg-gradient-to-r from-violet-400 to-violet-300 transition-all" style={{ width: `${Math.min(100, Math.round(weekCount / weeklyGoal * 100))}%` }} />
+                            </div>
+                          </div>
+                        )}
+                        {monthlyGoal > 0 && (
+                          <div>
+                            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                              <span>Mensal: {monthCount}</span><span>meta: {monthlyGoal}</span>
+                            </div>
+                            <div className="h-1.5 rounded-full bg-slate-700/50 overflow-hidden">
+                              <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-300 transition-all" style={{ width: `${Math.min(100, Math.round(monthCount / monthlyGoal * 100))}%` }} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  <button
+                    onClick={() => { setDailyGoalInput(String(dailyGoal || '')); setDailyGoalModal(true); }}
+                    className="mt-auto w-full px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 text-xs font-bold transition-all flex items-center justify-center gap-2"
+                  >
+                    <Edit3 size={13} /> {goalSet ? 'Editar metas' : 'Definir metas'}
+                  </button>
+                </>
+              );
+            })()}
+          </article>
+        </section>
+
+        {dashboardStats?.dailyLeads?.length > 0 && (
+          <section className="premium-panel p-6">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <h2 className="text-xl font-extrabold">Capturas dos últimos 14 dias</h2>
+                <p className="text-slate-400 text-sm mt-1">Evolução diária de leads novos no banco de dados.</p>
+              </div>
+              <div className="text-right shrink-0">
+                <span className="text-3xl font-black text-white">{dashboardStats.dailyLeads.reduce((a, d) => a + d.count, 0)}</span>
+                <p className="text-slate-500 text-xs mt-0.5">total 14 dias</p>
+              </div>
+            </div>
+            {(() => {
+              const data = dashboardStats.dailyLeads;
+              const maxVal = Math.max(...data.map(d => d.count), 1);
+              const barW = Math.floor(100 / data.length);
+              return (
+                <div className="flex items-end gap-1 h-28">
+                  {data.map((d, i) => {
+                    const pct = Math.round((d.count / maxVal) * 100);
+                    const date = new Date(d.date + 'T00:00:00');
+                    const isToday = d.date === new Date().toISOString().slice(0, 10);
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1 group" title={`${d.date}: ${d.count} leads`}>
+                        <span className="text-[9px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">{d.count}</span>
+                        <div
+                          className={`w-full rounded-t-sm transition-all ${isToday ? 'bg-primary' : 'bg-white/15 group-hover:bg-white/25'}`}
+                          style={{ height: `${Math.max(pct, 4)}%` }}
+                        />
+                        {i % 3 === 0 && (
+                          <span className="text-[9px] text-slate-600 whitespace-nowrap">
+                            {date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {dashboardStats.followupsDue > 0 && (
+              <div className="mt-4 flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm font-semibold">
+                <Clock size={15} /> {dashboardStats.followupsDue} follow-up{dashboardStats.followupsDue > 1 ? 's' : ''} pendente{dashboardStats.followupsDue > 1 ? 's' : ''} — verifique o CRM
               </div>
             )}
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 shrink-0">
-            <button
-              onClick={handleDailyAssistedAutomation}
-              disabled={bulkProgress !== null}
-              className="px-5 py-3 rounded-2xl bg-primary text-white hover:bg-primary-hover font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Zap size={18} /> Preparar rotina do dia
-            </button>
-            <button
-              onClick={() => openOperationalQueue('followups')}
-              className="px-5 py-3 rounded-2xl bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10 font-bold transition-all flex items-center justify-center gap-2"
-            >
-              <Clock size={18} /> Ver follow-ups
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-10 bg-[#0b1120] rounded-3xl border border-white/5 p-6">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-          <div>
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <Zap size={18} className="text-primary" /> Atalhos do dia
-            </h3>
-            <p className="text-slate-400 text-sm mt-1">Acesse as filas mais úteis sem precisar navegar por filtros e menus.</p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 w-full lg:w-auto">
-            <button
-              onClick={() => openOperationalQueue('high')}
-              className="px-4 py-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 hover:bg-emerald-500/20 transition-all text-left"
-            >
-              <span className="block text-xs font-black uppercase tracking-wider">Alta oportunidade</span>
-              <span className="text-[11px] text-slate-400">Priorizar melhores leads</span>
-            </button>
-            <button
-              onClick={handleSmartEmailQueue}
-              className="px-4 py-3 rounded-2xl bg-primary/10 border border-primary/20 text-primary hover:bg-primary/20 transition-all text-left"
-            >
-              <span className="block text-xs font-black uppercase tracking-wider">Fila de e-mails</span>
-              <span className="text-[11px] text-slate-400">Preparar disparos úteis</span>
-            </button>
-            <button
-              onClick={() => openOperationalQueue('validated')}
-              className="px-4 py-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-300 hover:bg-amber-500/20 transition-all text-left"
-            >
-              <span className="block text-xs font-black uppercase tracking-wider">Validados</span>
-              <span className="text-[11px] text-slate-400">Acompanhar abordagens</span>
-            </button>
-            <button
-              onClick={() => openOperationalQueue('followups')}
-              className="px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-300 hover:bg-red-500/20 transition-all text-left"
-            >
-              <span className="block text-xs font-black uppercase tracking-wider">Follow-ups</span>
-              <span className="text-[11px] text-slate-400">Vencidos ou para hoje</span>
-            </button>
-            <button
-              onClick={() => openOperationalQueue('capture')}
-              className="px-4 py-3 rounded-2xl bg-white/[0.04] border border-white/10 text-slate-200 hover:bg-white/[0.08] transition-all text-left"
-            >
-              <span className="block text-xs font-black uppercase tracking-wider">Nova captura</span>
-              <span className="text-[11px] text-slate-400">Adicionar oportunidades</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-[#0b1120] rounded-3xl border border-white/5 p-6 relative overflow-hidden">
-        <h3 className="text-lg font-bold mb-6 text-white flex items-center gap-2">
-          <History size={18} className="text-primary" /> Histórico de Varredura Recente
-        </h3>
-        
-        {latestAnalyses.length === 0 ? (
-          <div className="py-16 flex flex-col items-center justify-center text-center">
-            <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center text-slate-500 mb-4">
-              <Search size={24} />
-            </div>
-            <h4 className="text-white font-bold text-lg mb-1">Nenhum dado capturado ainda</h4>
-            <p className="text-slate-400 text-sm max-w-sm">Inicie uma nova captura inteligente para começar a alimentar seu funil de prospecção.</p>
-            <button 
-              onClick={() => setActiveMenu('nova-captura')}
-              className="mt-6 bg-primary hover:bg-primary-hover text-white font-bold py-3 px-6 rounded-xl transition-all"
-            >
-              Iniciar Nova Captura
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="bg-white/5 uppercase font-bold text-[10px] tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-6 py-4 rounded-l-xl">Lead Identificado</th>
-                  <th className="px-6 py-4">Origem / Categoria</th>
-                  <th className="px-6 py-4 rounded-r-xl">Momento da Captura</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {latestAnalyses.map((item, idx) => (
-                  <tr key={idx} className="hover:bg-white/5 transition-colors">
-                    <td className="px-6 py-4 font-semibold text-white">{item.nome || item.titulo || item.url}</td>
-                    <td className="px-6 py-4">
-                      <span className="bg-white/5 text-slate-300 px-2 py-1 rounded-lg text-xs font-medium capitalize">
-                        {item.type}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-slate-400 text-xs">
-                      {new Date(item.data_coleta).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          </section>
         )}
+
+        <section className="premium-panel p-6">
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-xl font-extrabold">Atalhos do dia</h2>
+              <p className="text-slate-400 text-sm mt-1">Ações rápidas com cor apenas como acento funcional.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+            {[
+              { label: 'Alta oportunidade', count: highOpportunity, desc: 'Priorizar melhores leads', color: 'success', action: () => openOperationalQueue('high') },
+              { label: 'Fila de e-mails', count: emailsFound, desc: 'Preparar disparos úteis', color: 'primary', action: handleSmartEmailQueue },
+              { label: 'Validados', count: totalValidated, desc: 'Acompanhar abordagens', color: 'warning', action: () => openOperationalQueue('validated') },
+              { label: 'Follow-ups', count: followupsDue, desc: 'Vencidos ou para hoje', color: 'danger', action: () => openOperationalQueue('followups') },
+              { label: 'Nova captura', count: 'Ação', desc: 'Adicionar oportunidades', color: 'accent', action: () => openOperationalQueue('capture') }
+            ].map(item => (
+              <button key={item.label} onClick={item.action} className="premium-card p-4 text-left hover:border-primary/40 hover:-translate-y-0.5 transition-all">
+                <span className={`premium-badge ${item.color}`}>{item.count}</span>
+                <h3 className="text-sm font-extrabold text-white mt-4">{item.label}</h3>
+                <p className="text-xs text-slate-400 mt-1">{item.desc}</p>
+                <div className={`mt-5 h-1 w-9 rounded-full ${item.color === 'success' ? 'bg-emerald-400' : item.color === 'warning' ? 'bg-amber-400' : item.color === 'danger' ? 'bg-red-400' : item.color === 'accent' ? 'bg-violet-400' : 'bg-primary'}`} />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="premium-panel p-6">
+          <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-4 mb-5">
+            <div>
+              <h2 className="text-xl font-extrabold">Histórico de Varredura Recente</h2>
+              <p className="text-slate-400 text-sm mt-1">Filtros e tabela com leitura rápida para operação comercial.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 xl:grid-cols-5 gap-2 w-full xl:w-auto">
+              <input className="premium-input" placeholder="Buscar lead" value={dashFilters.search} onChange={e => setDashFilters(p => ({ ...p, search: e.target.value }))} />
+              <select className="premium-input" value={dashFilters.source} onChange={e => setDashFilters(p => ({ ...p, source: e.target.value }))}>
+                <option value="todos">Origem</option><option value="sites">Site</option><option value="sistema">Sistema</option><option value="linkedin">LinkedIn</option>
+              </select>
+              <select className="premium-input" value={dashFilters.status} onChange={e => setDashFilters(p => ({ ...p, status: e.target.value }))}>
+                <option value="todos">Status</option><option value="validado">Validado</option><option value="pendente">Pendente</option>
+              </select>
+              <select className="premium-input" value={dashFilters.period} onChange={e => setDashFilters(p => ({ ...p, period: e.target.value }))}>
+                <option value="todos">Período</option><option value="hoje">Hoje</option><option value="semana">Semana</option>
+              </select>
+              <select className="premium-input" value={dashFilters.opp} onChange={e => setDashFilters(p => ({ ...p, opp: e.target.value }))}>
+                <option value="todos">Oportunidade</option><option value="alta">Alta (&gt;=78)</option><option value="media">Média</option>
+              </select>
+            </div>
+          </div>
+          {(() => {
+            const today = new Date().toISOString().slice(0, 10);
+            const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+            return latestAnalyses
+              .filter(item => {
+                if (dashFilters.search && !`${item.nome}${item.titulo}${item.url}`.toLowerCase().includes(dashFilters.search.toLowerCase())) return false;
+                if (dashFilters.source !== 'todos' && (item.type || item._typeCode || 'sites') !== dashFilters.source) return false;
+                if (dashFilters.status !== 'todos') {
+                  if (dashFilters.status === 'validado' && !item.is_validated) return false;
+                  if (dashFilters.status === 'pendente' && item.is_validated) return false;
+                }
+                if (dashFilters.period !== 'todos') {
+                  const d = (item.data_coleta || '').slice(0, 10);
+                  if (dashFilters.period === 'hoje' && d !== today) return false;
+                  if (dashFilters.period === 'semana' && d < weekAgo) return false;
+                }
+                if (dashFilters.opp !== 'todos') {
+                  const s = getCommercialScore(item, item._typeCode || item.type || 'sites');
+                  if (dashFilters.opp === 'alta' && s < 78) return false;
+                  if (dashFilters.opp === 'media' && (s < 50 || s >= 78)) return false;
+                }
+                return true;
+              });
+          })().length === 0 && latestAnalyses.length > 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-600/50 bg-surface-hover/40 py-10 px-6 text-center text-slate-400 text-sm">
+              Nenhum lead corresponde aos filtros selecionados.
+              <button onClick={() => setDashFilters({ search: '', source: 'todos', status: 'todos', period: 'todos', opp: 'todos' })} className="ml-3 text-primary underline text-xs">limpar filtros</button>
+            </div>
+          ) : latestAnalyses.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-600/50 bg-surface-hover/40 py-14 px-6 text-center">
+              <h4 className="text-white font-bold text-lg mb-1">Nenhuma varredura executada hoje.</h4>
+              <p className="text-slate-400 text-sm max-w-sm mx-auto">Inicie uma nova captura para encontrar oportunidades.</p>
+              <button onClick={() => setActiveMenu('nova-captura')} className="premium-btn primary mt-6">Iniciar nova captura</button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-border">
+              <table className="w-full min-w-[900px] text-left text-sm text-slate-300">
+                <thead className="bg-surface-hover/80 uppercase font-extrabold text-[11px] tracking-[0.08em] text-slate-500">
+                  <tr>
+                    <th className="px-5 py-4">Lead identificado</th>
+                    <th className="px-5 py-4">Origem/Categoria</th>
+                    <th className="px-5 py-4">Status</th>
+                    <th className="px-5 py-4">Score/Oportunidade</th>
+                    <th className="px-5 py-4">Momento</th>
+                    <th className="px-5 py-4 text-right">Ação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {latestAnalyses.filter(item => {
+                    const today2 = new Date().toISOString().slice(0, 10);
+                    const weekAgo2 = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+                    if (dashFilters.search && !`${item.nome}${item.titulo}${item.url}`.toLowerCase().includes(dashFilters.search.toLowerCase())) return false;
+                    if (dashFilters.source !== 'todos' && (item.type || item._typeCode || 'sites') !== dashFilters.source) return false;
+                    if (dashFilters.status === 'validado' && !item.is_validated) return false;
+                    if (dashFilters.status === 'pendente' && item.is_validated) return false;
+                    if (dashFilters.period === 'hoje' && (item.data_coleta || '').slice(0, 10) !== today2) return false;
+                    if (dashFilters.period === 'semana' && (item.data_coleta || '').slice(0, 10) < weekAgo2) return false;
+                    const sc = getCommercialScore(item, item._typeCode || item.type || 'sites');
+                    if (dashFilters.opp === 'alta' && sc < 78) return false;
+                    if (dashFilters.opp === 'media' && (sc < 50 || sc >= 78)) return false;
+                    return true;
+                  }).map((item, idx) => {
+                    const score = getCommercialScore(item, item._typeCode || item.type || 'sites');
+                    return (
+                      <tr key={idx} className="hover:bg-surface-hover/50 transition-colors">
+                        <td className="px-5 py-4 font-semibold text-white">{item.nome || item.titulo || item.url}</td>
+                        <td className="px-5 py-4"><span className="premium-badge capitalize">{item.type || item.categoria || 'site'}</span></td>
+                        <td className="px-5 py-4"><span className={`premium-badge ${item.is_validated ? 'success' : 'primary'}`}>{item.is_validated ? 'Validado' : 'Novo'}</span></td>
+                        <td className="px-5 py-4 font-mono text-white">{score || 0}/100 {score >= 78 ? 'Alto potencial' : 'Boa oportunidade'}</td>
+                        <td className="px-5 py-4 text-slate-400 text-xs">{new Date(item.data_coleta).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+                        <td className="px-5 py-4 text-right"><button onClick={() => handleOpenDetails(item)} className="premium-btn">Ver lead</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderNovaCaptura = () => (
     <div className="p-8 animate-fade-in h-full flex items-center justify-center overflow-y-auto custom-scrollbar bg-surface">
@@ -2307,19 +3198,35 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                 </div>
 
                 {showRegiaoDropdown && (
-                  <div className="absolute z-20 w-full mt-2 bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl max-h-60 overflow-y-auto custom-scrollbar">
-                    {REGIAO_OPTIONS.filter(opt => opt.toLowerCase().includes((captureForm.regiao || '').toLowerCase())).map(opt => (
-                      <div 
-                        key={opt}
-                        onMouseDown={() => {
-                          setCaptureForm({...captureForm, regiao: opt});
-                          setShowRegiaoDropdown(false);
-                        }}
-                        className="px-5 py-4 text-sm text-slate-300 hover:bg-primary/20 hover:text-white cursor-pointer transition-colors"
-                      >
-                        {opt}
-                      </div>
-                    ))}
+                  <div className="absolute z-20 w-full mt-2 bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl max-h-72 overflow-y-auto custom-scrollbar">
+                    {(() => {
+                      const query = (captureForm.regiao || '').toLowerCase();
+                      const filtered = REGIAO_OPTIONS
+                        .map(g => ({ ...g, items: g.items.filter(opt => opt.toLowerCase().includes(query)) }))
+                        .filter(g => g.items.length > 0);
+                      if (filtered.length === 0) return (
+                        <div className="px-5 py-4 text-sm text-slate-500 italic">Nenhuma localização encontrada</div>
+                      );
+                      return filtered.map(group => (
+                        <div key={group.group}>
+                          <div className="px-4 pt-3 pb-1 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-[#0d1525] sticky top-0">
+                            {group.group}
+                          </div>
+                          {group.items.map(opt => (
+                            <div
+                              key={opt}
+                              onMouseDown={() => {
+                                setCaptureForm({...captureForm, regiao: opt});
+                                setShowRegiaoDropdown(false);
+                              }}
+                              className="px-5 py-2.5 text-sm text-slate-300 hover:bg-primary/20 hover:text-white cursor-pointer transition-colors"
+                            >
+                              {opt}
+                            </div>
+                          ))}
+                        </div>
+                      ));
+                    })()}
                   </div>
                 )}
               </div>
@@ -2429,23 +3336,36 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               </div>
             )}
 
-            <button 
-              type="submit" 
-              disabled={captureStatus?.status === 'loading'}
-              className="w-full bg-gradient-to-r from-primary to-blue-600 hover:from-primary-hover hover:to-blue-700 text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-3 transition-all transform hover:scale-[1.01] active:scale-[0.99] shadow-lg shadow-primary/20 disabled:opacity-50"
-            >
-              {captureStatus?.status === 'loading' ? (
-                <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                  Processando IAs...
-                </>
-              ) : (
-                <>
-                  <Search size={22} />
-                  Iniciar Prospecção IA
-                </>
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={captureStatus?.status === 'loading'}
+                className="flex-1 bg-gradient-to-r from-primary to-blue-600 hover:from-primary-hover hover:to-blue-700 text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-3 transition-all transform hover:scale-[1.01] active:scale-[0.99] shadow-lg shadow-primary/20 disabled:opacity-50"
+              >
+                {captureStatus?.status === 'loading' ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    Processando IAs...
+                  </>
+                ) : (
+                  <>
+                    <Search size={22} />
+                    Iniciar Prospecção IA
+                  </>
+                )}
+              </button>
+              {captureStatus?.status === 'loading' && (
+                <button
+                  type="button"
+                  onClick={handleCancelCapture}
+                  disabled={isCancelling}
+                  className="px-5 py-5 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 font-bold text-sm transition-all disabled:opacity-50 flex items-center gap-2"
+                  title="Cancelar captura"
+                >
+                  <X size={18} /> {isCancelling ? 'Cancelando...' : 'Cancelar'}
+                </button>
               )}
-            </button>
+            </div>
 
             {captureStatus && (
               <div className={`p-5 rounded-2xl text-sm font-semibold animate-bounce-subtle ${
@@ -2480,6 +3400,146 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     </div>
   );
 
+
+  const renderKanban = () => {
+    const FUNIL_COLUMNS = [
+      { key: 'novo', label: 'Novos', color: 'text-slate-300', bar: 'bg-slate-500', dot: 'bg-slate-400' },
+      { key: 'em_contato', label: 'Em Contato', color: 'text-blue-300', bar: 'bg-blue-500', dot: 'bg-blue-400' },
+      { key: 'proposta', label: 'Proposta Enviada', color: 'text-amber-300', bar: 'bg-amber-500', dot: 'bg-amber-400' },
+      { key: 'negociacao', label: 'Negociação', color: 'text-violet-300', bar: 'bg-violet-500', dot: 'bg-violet-400' },
+      { key: 'fechado', label: 'Fechado', color: 'text-emerald-300', bar: 'bg-emerald-500', dot: 'bg-emerald-400' },
+      { key: 'perdido', label: 'Perdido', color: 'text-red-300', bar: 'bg-red-500', dot: 'bg-red-400' },
+    ];
+
+    const allLeads = [
+      ...sites.map(l => ({ ...l, _typeCode: 'sites' })),
+      ...sistemas.map(l => ({ ...l, _typeCode: 'sistema' })),
+    ];
+
+    const byColumn = {};
+    FUNIL_COLUMNS.forEach(col => {
+      byColumn[col.key] = allLeads.filter(l => (l.funil_status || 'novo') === col.key);
+    });
+
+    const totalValue = allLeads.reduce((sum, l) => {
+      const tv = ticketValues[`${l._typeCode}-${l.id}`] ?? l.ticket_value ?? 0;
+      return sum + (l.funil_status !== 'perdido' ? Number(tv) : 0);
+    }, 0);
+
+    const handleDragStart = (e, lead) => {
+      e.dataTransfer.setData('lead-id', String(lead.id));
+      e.dataTransfer.setData('lead-type', lead._typeCode);
+    };
+
+    const handleDrop = async (e, targetStatus) => {
+      e.preventDefault();
+      const id = Number(e.dataTransfer.getData('lead-id'));
+      const tipo = e.dataTransfer.getData('lead-type');
+      const table = tipo === 'sistema' ? 'leads_sistemas' : 'leads_sites';
+      await window.electronAPI.updateLeadFunil?.(table, id, targetStatus, null, null);
+      const setter = tipo === 'sistema' ? setSistemas : setSites;
+      setter(prev => prev.map(l => l.id === id ? { ...l, funil_status: targetStatus } : l));
+    };
+
+    return (
+      <div className="p-6 animate-fade-in h-full overflow-y-auto custom-scrollbar bg-surface">
+        <header className="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-2xl font-extrabold text-white">Pipeline Kanban</h1>
+            <p className="text-slate-400 text-sm mt-1">Arraste cards entre colunas para mover o lead no funil.</p>
+          </div>
+          {totalValue > 0 && (
+            <div className="shrink-0 text-right">
+              <p className="text-xs text-slate-500 uppercase font-bold tracking-wider">Pipeline potencial</p>
+              <p className="text-2xl font-black text-emerald-400 mt-0.5">
+                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(totalValue)}
+              </p>
+            </div>
+          )}
+        </header>
+
+        <div className="flex gap-4 overflow-x-auto pb-4 min-h-[60vh]">
+          {FUNIL_COLUMNS.map(col => {
+            const leads = byColumn[col.key] || [];
+            const colValue = leads.reduce((s, l) => s + (Number(ticketValues[`${l._typeCode}-${l.id}`] ?? l.ticket_value ?? 0)), 0);
+            return (
+              <div
+                key={col.key}
+                className="flex-shrink-0 w-64 flex flex-col"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => handleDrop(e, col.key)}
+              >
+                <div className="flex items-center gap-2 mb-3 px-1">
+                  <div className={`w-2 h-2 rounded-full ${col.dot}`} />
+                  <span className={`text-xs font-extrabold uppercase tracking-wider ${col.color}`}>{col.label}</span>
+                  <span className="ml-auto text-xs font-black text-slate-500">{leads.length}</span>
+                </div>
+                {colValue > 0 && (
+                  <p className="text-[10px] text-slate-600 font-bold px-1 mb-2">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(colValue)}
+                  </p>
+                )}
+                <div className="flex-1 space-y-2 min-h-[80px] rounded-2xl transition-colors">
+                  {leads.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-700/60 p-4 text-center text-slate-600 text-xs h-20 flex items-center justify-center">
+                      Arraste aqui
+                    </div>
+                  ) : leads.slice(0, 20).map(lead => {
+                    const cardKey = `${lead._typeCode}-${lead.id}`;
+                    const score = scoreOverrides[cardKey] ?? getCommercialScore(lead, lead._typeCode);
+                    const tv = ticketValues[cardKey] ?? lead.ticket_value;
+                    const noteVal = kanbanNotes[cardKey] ?? '';
+                    return (
+                      <div
+                        key={cardKey}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, lead)}
+                        onClick={() => handleOpenDetails(lead)}
+                        className="bg-surface-hover border border-border rounded-2xl p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 hover:-translate-y-0.5 transition-all select-none"
+                      >
+                        <p className="text-white font-semibold text-sm truncate">{lead.nome || lead.titulo}</p>
+                        {lead.nicho && <p className="text-slate-500 text-xs mt-0.5 truncate">{lead.nicho}</p>}
+                        {tv > 0 && <p className="text-emerald-400 text-[10px] font-bold mt-0.5">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(tv)}</p>}
+                        <div className="flex items-center justify-between mt-2">
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${score >= 78 ? 'bg-emerald-500/10 text-emerald-400' : score >= 55 ? 'bg-amber-500/10 text-amber-400' : 'bg-white/5 text-slate-500'}`}>
+                            {score}/100
+                          </span>
+                          {lead.followup_date && isFollowupDue(lead) && (
+                            <span className="text-[10px] text-red-400 font-bold flex items-center gap-1">
+                              <Clock size={10} /> Vencido
+                            </span>
+                          )}
+                        </div>
+                        <div onClick={e => e.stopPropagation()} className="mt-2">
+                          <input
+                            type="text"
+                            value={noteVal}
+                            onChange={e => setKanbanNotes(p => ({ ...p, [cardKey]: e.target.value }))}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter' && noteVal.trim()) {
+                                await window.electronAPI.addInteracao?.(lead.id, lead._typeCode === 'sites' ? 'sites' : 'sistema', 'nota', noteVal.trim());
+                                setKanbanNotes(p => ({ ...p, [cardKey]: '' }));
+                                showToast('Nota salva!', 'success', 2000);
+                              }
+                            }}
+                            placeholder="Nota rápida (Enter p/ salvar)"
+                            className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-primary/40 select-text cursor-text"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {leads.length > 20 && (
+                    <p className="text-center text-xs text-slate-600 py-2">+{leads.length - 20} mais</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const renderConfiguracoes = () => (
     <div className="relative h-full w-full overflow-y-auto custom-scrollbar flex items-center justify-center p-6 md:p-12 bg-surface">
@@ -2740,167 +3800,700 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               )}
             </div>
           </div>
+
+          {/* WhatsApp Auto Dispatch */}
+          <div className="mt-10 pt-8 border-t border-white/10">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-12 h-12 rounded-2xl bg-green-500/10 border border-green-500/20 text-green-400 flex items-center justify-center shrink-0">
+                <MessageCircle size={24} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Disparo Automático de WhatsApp</h3>
+                <p className="text-slate-400 text-sm">Pergunta se deseja disparar mensagens logo após cada captura de leads</p>
+              </div>
+            </div>
+
+            <div className="glass p-5 rounded-2xl border border-white/10 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-slate-300 font-medium">Ativar disparo automático</label>
+                  <p className="text-slate-500 text-xs mt-0.5">Ao finalizar uma captura de sites, um popup perguntará se deseja enviar WhatsApp para os leads com telefone.</p>
+                </div>
+                <button
+                  onClick={() => toggleWppAutoDispatch(!wppAutoDispatch)}
+                  className={`relative w-12 h-6 rounded-full transition-colors shrink-0 ml-4 ${wppAutoDispatch ? 'bg-green-500' : 'bg-white/10'}`}
+                >
+                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${wppAutoDispatch ? 'right-1' : 'left-1'}`} />
+                </button>
+              </div>
+              {wppAutoDispatch && (
+                <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4 text-xs text-green-200 leading-relaxed">
+                  <strong className="text-green-300">Ativo.</strong> Após cada captura de sites com telefone, um popup aparecerá perguntando se deseja iniciar o disparo de WhatsApp. Você abrirá cada conversa manualmente e confirmará o envio lead a lead.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* T08 — Delay entre envios */}
+          <div className="mt-10 pt-8 border-t border-white/10">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                <Clock size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Intervalo entre envios</h3>
+                <p className="text-slate-400 text-xs">Tempo de espera entre cada e-mail no disparo em lote</p>
+              </div>
+            </div>
+            <div className="glass p-4 rounded-2xl border border-white/10 flex items-center gap-4">
+              <input
+                type="range"
+                min={EMAIL_SEND_DELAY_MIN}
+                max={EMAIL_SEND_DELAY_MAX}
+                step={500}
+                value={emailSendDelay}
+                onChange={e => setEmailSendDelay(Number(e.target.value))}
+                className="flex-1"
+              />
+              <span className="text-white font-bold text-sm w-16 text-right">{(emailSendDelay / 1000).toFixed(1)}s</span>
+              <button
+                onClick={() => window.electronAPI.setConfig('email_send_delay', String(emailSendDelay))}
+                className="px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20 font-bold text-xs transition-all"
+              >
+                Salvar
+              </button>
+            </div>
+            <p className="text-slate-600 text-xs mt-2">Recomendado: 2–5 segundos para Gmail. Valores menores aumentam risco de bloqueio SMTP.</p>
+          </div>
+
+          {/* Templates de Mensagem */}
+          <div className="mt-10 pt-8 border-t border-white/10">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center shrink-0">
+                <FileText size={24} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Templates de Mensagem</h3>
+                <p className="text-slate-400 text-sm">Mensagens personalizadas por nicho e canal de contato</p>
+              </div>
+            </div>
+
+            <div className="glass p-5 rounded-2xl border border-white/10 space-y-4">
+              {messageTemplates.length === 0 ? (
+                <p className="text-slate-500 text-sm">Nenhum template cadastrado.</p>
+              ) : (
+                <div className="space-y-3">
+                  {messageTemplates.map(t => (
+                    <div key={t.id} className="flex items-start gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-white font-semibold text-sm">{t.nome}</span>
+                          {t.nicho && <span className="px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-300 text-[10px] font-bold">{t.nicho}</span>}
+                          <span className="px-2 py-0.5 rounded-full bg-white/10 text-slate-400 text-[10px] font-bold">{t.canal === 'whatsapp' ? 'WhatsApp' : 'E-mail'}</span>
+                          {t.has_site !== null && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.has_site ? 'bg-blue-500/10 text-blue-300' : 'bg-amber-500/10 text-amber-300'}`}>{t.has_site ? 'Com site' : 'Sem site'}</span>}
+                        </div>
+                        <p className="text-slate-400 text-xs mt-1 line-clamp-2">{t.corpo}</p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (confirm(`Excluir template "${t.nome}"?`)) {
+                            await window.electronAPI.deleteMessageTemplate?.(t.id);
+                            const res = await window.electronAPI.getMessageTemplates?.();
+                            if (res?.success) setMessageTemplates(res.data || []);
+                          }
+                        }}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Form novo template */}
+              <div className="pt-4 border-t border-white/10 space-y-3">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Novo template</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input
+                    className="bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                    placeholder="Nome do template"
+                    value={templateForm.nome}
+                    onChange={e => setTemplateForm(p => ({ ...p, nome: e.target.value }))}
+                  />
+                  <input
+                    className="bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                    placeholder="Nicho (ex: saúde, juridico)"
+                    value={templateForm.nicho}
+                    onChange={e => setTemplateForm(p => ({ ...p, nicho: e.target.value }))}
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <select
+                    className="bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                    value={templateForm.canal}
+                    onChange={e => setTemplateForm(p => ({ ...p, canal: e.target.value }))}
+                  >
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="email">E-mail</option>
+                  </select>
+                  <select
+                    className="bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                    value={templateForm.has_site === null ? '' : String(templateForm.has_site)}
+                    onChange={e => setTemplateForm(p => ({ ...p, has_site: e.target.value === '' ? null : e.target.value === '1' }))}
+                  >
+                    <option value="">Qualquer (com ou sem site)</option>
+                    <option value="1">Apenas leads com site</option>
+                    <option value="0">Apenas leads sem site</option>
+                  </select>
+                </div>
+                <textarea
+                  rows={3}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 resize-none"
+                  placeholder={`Corpo da mensagem.\nVariáveis: {nome}, {nicho}, {problema1}, {url}`}
+                  value={templateForm.corpo}
+                  onChange={e => setTemplateForm(p => ({ ...p, corpo: e.target.value }))}
+                />
+                {templateForm.corpo && templateForm.canal === 'whatsapp' && (
+                  <div className="mt-2">
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-2">Preview WhatsApp</p>
+                    <div className="bg-[#0b141a] rounded-2xl p-4 flex justify-end">
+                      <div className="max-w-[85%] bg-[#005c4b] text-[#e9edef] rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed shadow-md">
+                        {templateForm.corpo
+                          .replace(/\{nome\}/g, 'João Silva')
+                          .replace(/\{nicho\}/g, templateForm.nicho || 'saúde')
+                          .replace(/\{problema1\}/g, 'site lento no mobile')
+                          .replace(/\{url\}/g, 'empresa.com.br')
+                          .split('\n')
+                          .map((line, i) => {
+                            const formatted = line.replace(/\*([^*]+)\*/g, '<strong>$1</strong>').replace(/_([^_]+)_/g, '<em>$1</em>');
+                            return <span key={i} dangerouslySetInnerHTML={{ __html: formatted + (i < templateForm.corpo.split('\n').length - 1 ? '<br/>' : '') }} />;
+                          })}
+                        <div className="text-right text-[10px] text-[#8696a0] mt-1">10:42 ✓✓</div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-600 mt-1">*negrito* _itálico_ | variáveis preenchidas com exemplo</p>
+                  </div>
+                )}
+                <button
+                  disabled={!templateForm.nome || !templateForm.corpo}
+                  onClick={async () => {
+                    await window.electronAPI.saveMessageTemplate?.({
+                      nome: templateForm.nome,
+                      canal: templateForm.canal,
+                      nicho: templateForm.nicho || null,
+                      has_site: templateForm.has_site,
+                      corpo: templateForm.corpo
+                    });
+                    setTemplateForm({ id: null, nicho: '', canal: 'whatsapp', has_site: null, nome: '', corpo: '' });
+                    const res = await window.electronAPI.getMessageTemplates?.();
+                    if (res?.success) setMessageTemplates(res.data || []);
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-violet-500 text-white font-bold text-sm hover:bg-violet-600 transition-all disabled:opacity-40"
+                >
+                  Salvar Template
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Backup & Restauração */}
+          <div className="mt-10 pt-8 border-t border-white/10">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
+                <Database size={24} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Backup & Restauração</h3>
+                <p className="text-slate-400 text-sm">Proteja seus leads e restaure em caso de problemas</p>
+              </div>
+            </div>
+
+            <div className="glass p-5 rounded-2xl border border-white/10">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={async () => {
+                    const res = await window.electronAPI.backupDbManual?.();
+                    if (res?.success) setAppDialog({ title: 'Backup criado', message: `Arquivo salvo em: ${res.path}`, type: 'success' });
+                    else if (res?.error !== 'cancelled') setAppDialog({ title: 'Erro no backup', message: res?.error || 'Falha ao criar backup.', type: 'error' });
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-teal-500/10 border border-teal-500/25 text-teal-300 hover:bg-teal-500/20 font-bold text-sm transition-all"
+                >
+                  <Download size={16} /> Exportar backup (.db)
+                </button>
+                <button
+                  onClick={async () => {
+                    const res = await window.electronAPI.restoreDb?.();
+                    if (res?.success) setAppDialog({ title: 'Banco restaurado', message: 'O banco de dados foi restaurado com sucesso. Recarregue o app para ver os dados.', type: 'success' });
+                    else if (res?.error !== 'cancelled') setAppDialog({ title: 'Erro ao restaurar', message: res?.error || 'Falha ao restaurar.', type: 'error' });
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20 font-bold text-sm transition-all"
+                >
+                  <Upload size={16} /> Restaurar backup (.db)
+                </button>
+                <button
+                  onClick={async () => {
+                    const res = await window.electronAPI.exportLeadsJson?.();
+                    if (res?.success) setAppDialog({ title: 'Exportado', message: `JSON salvo em: ${res.path}`, type: 'success' });
+                    else if (res?.error !== 'cancelled') setAppDialog({ title: 'Erro', message: res?.error || 'Falha ao exportar.', type: 'error' });
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-300 hover:bg-blue-500/20 font-bold text-sm transition-all"
+                >
+                  <FileText size={16} /> Exportar leads (.json)
+                </button>
+                <button
+                  onClick={async () => {
+                    const res = await window.electronAPI.importLeadsJson?.();
+                    if (res?.success) setAppDialog({ title: 'Importado', message: `${res.imported || 0} leads importados com sucesso.`, type: 'success' });
+                    else if (res?.error !== 'cancelled') setAppDialog({ title: 'Erro', message: res?.error || 'Falha ao importar.', type: 'error' });
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 font-bold text-sm transition-all"
+                >
+                  <Upload size={16} /> Importar leads (.json)
+                </button>
+              </div>
+              <p className="text-slate-600 text-xs mt-4">O backup do banco é salvo automaticamente toda vez que o app é fechado. Use esta seção para copias manuais ou migrações.</p>
+            </div>
+          </div>
+
+          {/* T30 — Saúde do app */}
+          <div className="mt-10 pt-8 border-t border-white/10">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                  <Activity size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Saúde do App</h3>
+                  <p className="text-slate-400 text-sm">Informações do sistema e uso de recursos</p>
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  const res = await window.electronAPI.getAppHealth?.();
+                  if (res?.success) setAppHealth(res.data);
+                }}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 font-bold text-sm transition-all"
+              >
+                <RefreshCw size={14} /> Verificar
+              </button>
+            </div>
+            {appHealth ? (
+              <div className="glass p-5 rounded-2xl border border-white/10 grid grid-cols-2 sm:grid-cols-3 gap-4">
+                {[
+                  { label: 'Versão', value: appHealth.version },
+                  { label: 'Plataforma', value: appHealth.platform },
+                  { label: 'Banco de dados', value: `${appHealth.dbSizeKb} KB` },
+                  { label: 'Memória heap', value: `${appHealth.heapUsedMb} MB` },
+                  { label: 'Uptime', value: `${Math.floor(appHealth.uptime / 60)}m ${appHealth.uptime % 60}s` },
+                  { label: 'Último backup auto', value: appHealth.lastBackup || 'Nenhum' },
+                ].map(item => (
+                  <div key={item.label} className="bg-white/5 rounded-xl p-3">
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">{item.label}</div>
+                    <div className="text-white font-semibold text-sm truncate">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="glass p-5 rounded-2xl border border-white/10 text-center text-slate-500 text-sm">
+                Clique em "Verificar" para carregar informações do sistema.
+              </div>
+            )}
+          </div>
+
+          {/* T27 — Log de atividades */}
+          <div className="mt-10 pt-8 border-t border-white/10">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center shrink-0">
+                  <History size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Log de Atividades</h3>
+                  <p className="text-slate-400 text-sm">Histórico recente de ações no sistema</p>
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  const res = await window.electronAPI.getActivityLog?.(50);
+                  if (res?.success) setActivityLog(res.data || []);
+                }}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-violet-500/10 border border-violet-500/25 text-violet-300 hover:bg-violet-500/20 font-bold text-sm transition-all"
+              >
+                <RefreshCw size={14} /> Carregar
+              </button>
+            </div>
+            <div className="glass rounded-2xl border border-white/10 overflow-hidden">
+              {activityLog.length === 0 ? (
+                <div className="p-5 text-center text-slate-500 text-sm">
+                  Clique em "Carregar" para ver as atividades recentes.
+                </div>
+              ) : (
+                <div className="divide-y divide-white/5 max-h-80 overflow-y-auto custom-scrollbar">
+                  {activityLog.map(entry => (
+                    <div key={entry.id} className="flex items-start gap-3 px-5 py-3 hover:bg-white/5 transition-colors">
+                      <div className="w-1.5 h-1.5 rounded-full bg-violet-400 mt-2 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-violet-300 bg-violet-500/10 px-2 py-0.5 rounded-md uppercase">{entry.tipo}</span>
+                          <span className="text-[10px] text-slate-500">{new Date(entry.criado_em).toLocaleString('pt-BR')}</span>
+                        </div>
+                        <div className="text-sm text-slate-300 mt-1 truncate">{entry.detalhe}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
         </div>
       </div>
     </div>
   );
 
   const renderWhatsappComercial = () => {
-    const sampleLeads = whatsappCommercialLeads.slice(0, 6);
+    const pendingLeads = whatsappCommercialLeads.filter(l => !l.wpp_enviado);
+    const sentLeads   = whatsappCommercialLeads.filter(l =>  l.wpp_enviado);
+    const filteredWhatsappLeads = whatsappCommercialLeads
+      .filter(lead => matchesLeadNameQuery(lead, gridFilters.nameQuery))
+      .sort(sortByInsertedAtAsc);
+    const queueLeads = filteredWhatsappLeads.slice(0, 8);
+
+    const { active, status, queue, currentIdx, results } = wppPilot;
+    const sentCount  = results.filter(r => r.status === 'sent').length;
+    const errorCount = results.filter(r => r.status !== 'sent' && r.status !== 'skipped').length;
+    const skipCount  = results.filter(r => r.status === 'skipped').length;
+    const progress   = queue.length > 0 ? Math.round((results.length / queue.length) * 100) : 0;
+    const currentLead = queue[currentIdx] || null;
+
+    const statusMeta = {
+      initializing: { label: 'Inicializando…',  color: 'text-amber-300',  bg: 'bg-amber-500/10 border-amber-500/20' },
+      'qr-wait':    { label: 'Aguardando login', color: 'text-orange-300', bg: 'bg-orange-500/10 border-orange-500/20' },
+      running:      { label: 'Enviando…',        color: 'text-emerald-300',bg: 'bg-emerald-500/10 border-emerald-500/20' },
+      paused:       { label: 'Pausado',           color: 'text-slate-300',  bg: 'bg-white/5 border-white/10' },
+      done:         { label: 'Concluído',         color: 'text-primary',    bg: 'bg-primary/10 border-primary/20' },
+      idle:         { label: 'Aguardando',        color: 'text-slate-400',  bg: 'bg-white/5 border-white/10' },
+    };
+    const sm = statusMeta[status] || statusMeta.idle;
+
+    const resultIcon = (s) => {
+      if (s === 'sent')    return <CircleCheck size={13} className="text-emerald-400 shrink-0" />;
+      if (s === 'skipped') return <SkipForward size={13} className="text-slate-500 shrink-0" />;
+      return <AlertTriangle size={13} className="text-red-400 shrink-0" />;
+    };
 
     return (
       <div className="p-8 animate-fade-in h-full overflow-y-auto custom-scrollbar bg-surface">
+        {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8">
           <div>
             <div className="flex items-center gap-3 text-emerald-300 text-xs font-black uppercase tracking-widest mb-3">
               <MessageCircle size={16} /> Área Comercial
             </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">WhatsApp Business</h1>
+            <h1 className="text-3xl font-bold text-white tracking-tight">WhatsApp AutoPilot</h1>
             <p className="text-slate-400 mt-2 max-w-3xl">
-              Central inicial para gerenciar conversas e automações futuras com leads validados que possuem telefone ou WhatsApp capturado.
+              Envie mensagens personalizadas para todos os leads validados automaticamente. O sistema abre o WhatsApp Web, preenche e envia um a um enquanto você acompanha.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => showAppAlert({
-              title: 'Integração em preparação',
-              message: 'A associação com WhatsApp Business será conectada em uma próxima etapa. Por enquanto, esta tela organiza a visão comercial e a base elegível para automações.',
-              variant: 'info'
-            })}
-            className="bg-emerald-500/10 border border-emerald-400/30 hover:bg-emerald-500/20 text-emerald-300 font-bold px-5 py-3 rounded-2xl transition-all flex items-center justify-center gap-2"
-          >
-            <Radio size={18} />
-            Associar WhatsApp Business
-          </button>
+          {!active && (
+            <button
+              type="button"
+              onClick={startWppAutoPilot}
+              className="bg-emerald-500 hover:bg-emerald-400 text-white font-bold px-6 py-3 rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
+            >
+              <Play size={18} />
+              Iniciar Envio Automático
+              {pendingLeads.length > 0 && (
+                <span className="bg-white/20 text-white text-xs font-black px-2 py-0.5 rounded-full ml-1">
+                  {pendingLeads.length}
+                </span>
+              )}
+            </button>
+          )}
+          {active && (
+            <button
+              type="button"
+              onClick={stopWppPilot}
+              className="bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-bold px-5 py-3 rounded-2xl transition-all flex items-center justify-center gap-2"
+            >
+              <StopCircle size={18} />
+              Encerrar AutoPilot
+            </button>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-          <div className="glass rounded-3xl border border-white/10 p-6">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 text-emerald-300 flex items-center justify-center mb-5">
-              <Users size={22} />
-            </div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Leads elegíveis</p>
-            <div className="flex items-end gap-3 mt-2">
-              <span className="text-4xl font-black text-white">{whatsappCommercialLeads.length}</span>
-              <span className="text-xs text-slate-400 mb-2">validados com WhatsApp</span>
-            </div>
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <div className="glass rounded-3xl border border-white/10 p-5">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Pendentes</p>
+            <span className="text-3xl font-black text-white">{pendingLeads.length}</span>
           </div>
-
-          <div className="glass rounded-3xl border border-white/10 p-6">
-            <div className="w-11 h-11 rounded-2xl bg-amber-400/10 text-amber-300 flex items-center justify-center mb-5">
-              <Bell size={22} />
-            </div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Não visualizadas</p>
-            <div className="flex items-end gap-3 mt-2">
-              <span className="text-4xl font-black text-white">{whatsappUnreadCount}</span>
-              <span className="text-xs text-slate-400 mb-2">mensagens</span>
-            </div>
+          <div className="glass rounded-3xl border border-white/10 p-5">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Enviados</p>
+            <span className="text-3xl font-black text-emerald-400">{sentLeads.length}</span>
           </div>
-
-          <div className="glass rounded-3xl border border-white/10 p-6">
-            <div className="w-11 h-11 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mb-5">
-              <Bot size={22} />
-            </div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Automações programadas</p>
-            <div className="flex items-end gap-3 mt-2">
-              <span className="text-4xl font-black text-white">{whatsappScheduledCount}</span>
-              <span className="text-xs text-slate-400 mb-2">ativas</span>
-            </div>
+          <div className="glass rounded-3xl border border-white/10 p-5">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Nesta sessão</p>
+            <span className="text-3xl font-black text-primary">{sentCount}</span>
+          </div>
+          <div className="glass rounded-3xl border border-white/10 p-5">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Total elegíveis</p>
+            <span className="text-3xl font-black text-white">{whatsappCommercialLeads.length}</span>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-6">
-          <div className="glass rounded-3xl border border-white/10 overflow-hidden">
-            <div className="p-6 border-b border-white/10 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold text-white">Fila comercial WhatsApp</h2>
-                <p className="text-sm text-slate-400 mt-1">Somente leads validados capturados no Lead Hunter com número disponível.</p>
+        {/* AutoPilot Panel */}
+        {active ? (
+          <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-6">
+            {/* Left — status + current lead */}
+            <div className="glass rounded-3xl border border-white/10 overflow-hidden">
+              {/* Status bar */}
+              <div className={`px-6 py-4 border-b border-white/10 flex items-center justify-between gap-4`}>
+                <div className="flex items-center gap-3">
+                  {(status === 'running' || status === 'initializing') && (
+                    <Loader2 size={16} className="animate-spin text-emerald-400" />
+                  )}
+                  <span className={`text-sm font-bold ${sm.color}`}>{sm.label}</span>
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold border ${sm.bg} ${sm.color}`}>
+                    {results.length}/{queue.length} processados
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {status === 'running' && (
+                    <button onClick={pauseWppPilot} className="flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1.5 rounded-xl transition-all">
+                      <Pause size={13} /> Pausar
+                    </button>
+                  )}
+                  {status === 'paused' && (
+                    <button onClick={resumeWppPilot} className="flex items-center gap-1.5 text-xs font-bold text-emerald-300 hover:text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 px-3 py-1.5 rounded-xl transition-all">
+                      <Play size={13} /> Retomar
+                    </button>
+                  )}
+                  {(status === 'running' || status === 'paused') && (
+                    <button onClick={skipWppLead} className="flex items-center gap-1.5 text-xs font-bold text-slate-400 hover:text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1.5 rounded-xl transition-all">
+                      <SkipForward size={13} /> Pular
+                    </button>
+                  )}
+                  {status === 'qr-wait' && (
+                    <button onClick={resumeWppAfterQr} className="flex items-center gap-1.5 text-xs font-bold text-amber-300 hover:text-amber-200 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-xl transition-all">
+                      <RefreshCw size={13} /> Verificar login
+                    </button>
+                  )}
+                </div>
               </div>
-              <span className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-bold">
-                Base Lead Hunter
-              </span>
-            </div>
-            <div className="divide-y divide-white/5">
-              {sampleLeads.length > 0 ? sampleLeads.map(lead => (
-                <div key={`${lead._typeCode}-${lead.id}`} className="p-5 flex items-center justify-between gap-4 hover:bg-white/[0.03] transition-colors">
-                  <div className="min-w-0">
-                    <p className="text-white font-bold truncate">{getLeadName(lead)}</p>
-                    <p className="text-slate-400 text-xs mt-1 font-mono">{lead.telefone}</p>
+
+              {/* Progress bar */}
+              <div className="px-6 pt-5 pb-2">
+                <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+                  <span>{progress}% concluído</span>
+                  <span className="flex items-center gap-3">
+                    <span className="text-emerald-400">{sentCount} enviados</span>
+                    {errorCount > 0 && <span className="text-red-400">{errorCount} erros</span>}
+                    {skipCount  > 0 && <span className="text-slate-500">{skipCount} pulados</span>}
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-primary transition-all duration-700"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Current lead */}
+              {status === 'qr-wait' ? (
+                <div className="p-6 text-center">
+                  <div className="w-14 h-14 rounded-2xl bg-orange-500/10 border border-orange-500/20 text-orange-300 flex items-center justify-center mx-auto mb-4">
+                    <Smartphone size={26} />
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {lead.wpp_enviado ? (
-                      <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[11px] font-bold">
-                        WhatsApp enviado
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[11px] font-bold">
-                        Pendente
-                      </span>
-                    )}
+                  <p className="text-white font-bold text-lg">Login necessário</p>
+                  <p className="text-slate-400 text-sm mt-2 max-w-sm mx-auto">
+                    Escaneie o QR Code na janela do WhatsApp Web que foi aberta. Após logar, clique em <strong className="text-amber-300">Verificar login</strong> para continuar o envio automático.
+                  </p>
+                </div>
+              ) : status === 'done' ? (
+                <div className="p-6 text-center">
+                  <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center mx-auto mb-4">
+                    <ListChecks size={26} />
+                  </div>
+                  <p className="text-white font-bold text-lg">Envio concluído!</p>
+                  <p className="text-slate-400 text-sm mt-2">
+                    <span className="text-emerald-400 font-bold">{sentCount}</span> mensagens enviadas,{' '}
+                    {skipCount > 0 && <><span className="text-slate-400 font-bold">{skipCount}</span> puladas, </>}
+                    {errorCount > 0 && <><span className="text-red-400 font-bold">{errorCount}</span> com erro</>}
+                  </p>
+                  <button onClick={stopWppPilot} className="mt-5 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold px-5 py-2.5 rounded-xl transition-all text-sm">
+                    Fechar AutoPilot
+                  </button>
+                </div>
+              ) : currentLead ? (
+                <div className="p-6">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Enviando agora</p>
+                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-5">
+                    <div className="flex items-start gap-4">
+                      <div className="w-11 h-11 rounded-xl bg-emerald-500/10 text-emerald-300 flex items-center justify-center text-lg font-black shrink-0">
+                        {(getLeadName(currentLead) || '?')[0].toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-white font-bold truncate">{getLeadName(currentLead)}</p>
+                        <p className="text-slate-400 text-xs mt-0.5 font-mono">{currentLead.telefone}</p>
+                        {currentLead.url && (
+                          <p className="text-slate-500 text-xs mt-1 truncate">{currentLead.url}</p>
+                        )}
+                      </div>
+                      {(status === 'running' || status === 'initializing') && (
+                        <Loader2 size={18} className="animate-spin text-emerald-400 shrink-0 mt-1" />
+                      )}
+                    </div>
+                    <div className="mt-4 bg-black/20 rounded-xl p-3">
+                      <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1.5">Mensagem</p>
+                      <p className="text-slate-300 text-xs leading-relaxed line-clamp-4">
+                        {buildWhatsappMessage(currentLead)}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              )) : (
-                <div className="p-10 text-center">
-                  <MessageCircle size={30} className="mx-auto text-slate-600 mb-3" />
-                  <p className="text-white font-bold">Nenhum lead validado com WhatsApp ainda</p>
-                  <p className="text-slate-400 text-sm mt-2">Valide leads com telefone no Lead Hunter para alimentar esta central.</p>
+              ) : (
+                <div className="p-6 text-center text-slate-500">
+                  <Loader2 size={24} className="animate-spin mx-auto mb-2" />
+                  <p className="text-sm">Preparando…</p>
                 </div>
               )}
             </div>
-          </div>
 
-          <div className="glass rounded-3xl border border-white/10 p-6">
-            <div className="flex items-start gap-4 mb-6">
-              <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
-                <Calendar size={22} />
+            {/* Right — queue + results */}
+            <div className="glass rounded-3xl border border-white/10 overflow-hidden flex flex-col">
+              <div className="p-5 border-b border-white/10">
+                <h3 className="text-base font-bold text-white">Fila de envio</h3>
+                <p className="text-xs text-slate-500 mt-0.5">{queue.length} leads nesta sessão</p>
               </div>
-              <div>
-                <h2 className="text-xl font-bold text-white">Automação programada</h2>
-                <p className="text-sm text-slate-400 mt-1">Planeje comunicados para leads validados. O envio automático será habilitado quando o WhatsApp Business estiver associado.</p>
+              <div className="flex-1 overflow-y-auto custom-scrollbar divide-y divide-white/5 max-h-[520px]">
+                {queue.map((lead, idx) => {
+                  const res = results.find(r => r.lead.id === lead.id && r.lead._typeCode === lead._typeCode);
+                  const isCurrent = idx === currentIdx && !res;
+                  return (
+                    <div
+                      key={`${lead._typeCode}-${lead.id}`}
+                      className={`px-5 py-3 flex items-center gap-3 transition-colors ${isCurrent ? 'bg-emerald-500/5 border-l-2 border-emerald-400' : 'border-l-2 border-transparent'}`}
+                    >
+                      <div className="shrink-0">
+                        {res ? resultIcon(res.status) : isCurrent ? (
+                          <Loader2 size={13} className="animate-spin text-emerald-400" />
+                        ) : (
+                          <div className="w-3 h-3 rounded-full bg-white/10" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-sm font-semibold truncate ${isCurrent ? 'text-white' : res ? 'text-slate-400' : 'text-slate-300'}`}>
+                          {getLeadName(lead)}
+                        </p>
+                        <p className="text-slate-600 text-[11px] font-mono truncate">{lead.telefone}</p>
+                      </div>
+                      {res && (
+                        <span className={`text-[10px] font-bold uppercase tracking-wide shrink-0 ${
+                          res.status === 'sent'    ? 'text-emerald-400' :
+                          res.status === 'skipped' ? 'text-slate-500' : 'text-red-400'
+                        }`}>
+                          {res.status === 'sent' ? 'enviado' : res.status === 'skipped' ? 'pulado' : res.status}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ── Visão padrão (sem pilot ativo) ── */
+          <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-6">
+            <div className="glass rounded-3xl border border-white/10 overflow-hidden">
+              <div className="p-6 border-b border-white/10 flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Fila comercial</h2>
+                  <p className="text-sm text-slate-400 mt-1">Leads validados com WhatsApp ordenados por inserção.</p>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {renderNameFilterInput('Filtrar por nome')}
+                  <span className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-bold">
+                    {pendingLeads.length} pendentes
+                  </span>
+                </div>
+              </div>
+              <div className="divide-y divide-white/5">
+                {queueLeads.length > 0 ? queueLeads.map(lead => (
+                  <div key={`${lead._typeCode}-${lead.id}`} className="p-5 flex items-center justify-between gap-4 hover:bg-white/[0.03] transition-colors">
+                    <div className="min-w-0">
+                      <p className="text-white font-bold truncate">{getLeadName(lead)}</p>
+                      <p className="text-slate-400 text-xs mt-1 font-mono">{lead.telefone}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {lead.wpp_enviado ? (
+                        <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[11px] font-bold">
+                          Enviado
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[11px] font-bold">
+                          Pendente
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )) : (
+                  <div className="p-10 text-center">
+                    <MessageCircle size={30} className="mx-auto text-slate-600 mb-3" />
+                    <p className="text-white font-bold">Nenhum lead validado com WhatsApp</p>
+                    <p className="text-slate-400 text-sm mt-2">Valide leads com telefone no Lead Hunter para alimentar esta central.</p>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">Público</label>
-                <div className="bg-dark/50 border border-white/10 rounded-2xl px-4 py-3 text-slate-300">
-                  Leads validados com WhatsApp ({whatsappCommercialLeads.length})
+            <div className="glass rounded-3xl border border-white/10 p-6 flex flex-col">
+              <div className="flex items-start gap-4 mb-6">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                  <Bot size={22} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white">Como funciona</h2>
+                  <p className="text-sm text-slate-400 mt-1">O AutoPilot envia mensagens personalizadas para cada lead em sequência.</p>
                 </div>
               </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">Data e horário</label>
-                <input
-                  type="datetime-local"
-                  disabled
-                  className="w-full bg-dark/50 border border-white/10 rounded-2xl px-4 py-3 text-slate-500 cursor-not-allowed"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">Comunicado</label>
-                <textarea
-                  disabled
-                  rows={5}
-                  placeholder="Ex: Olá, tudo bem? Preparei algumas observações rápidas sobre o site de vocês..."
-                  className="w-full bg-dark/50 border border-white/10 rounded-2xl px-4 py-3 text-slate-500 resize-none cursor-not-allowed placeholder:text-slate-600"
-                />
-              </div>
+              <ol className="space-y-4 flex-1">
+                {[
+                  { n: '1', title: 'Clique em Iniciar', desc: 'O WhatsApp Web abre em uma janela separada. Se necessário, escaneie o QR Code uma única vez.' },
+                  { n: '2', title: 'Envio automático', desc: 'Para cada lead com WhatsApp, o sistema navega para a conversa, preenche a mensagem personalizada e clica em Enviar.' },
+                  { n: '3', title: 'Acompanhe ao vivo', desc: 'Veja o status em tempo real — enviado, pulado ou erro. Pode pausar, pular ou parar a qualquer momento.' },
+                ].map(step => (
+                  <li key={step.n} className="flex gap-4">
+                    <div className="w-7 h-7 rounded-full bg-primary/10 text-primary text-xs font-black flex items-center justify-center shrink-0 mt-0.5">
+                      {step.n}
+                    </div>
+                    <div>
+                      <p className="text-white text-sm font-bold">{step.title}</p>
+                      <p className="text-slate-400 text-xs mt-0.5 leading-relaxed">{step.desc}</p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
               <button
                 type="button"
-                disabled
-                className="w-full bg-white/5 border border-white/10 text-slate-500 font-bold py-4 rounded-2xl cursor-not-allowed flex items-center justify-center gap-2"
+                onClick={startWppAutoPilot}
+                disabled={pendingLeads.length === 0}
+                className="mt-6 w-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-white/5 disabled:border disabled:border-white/10 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
               >
-                <Bot size={18} />
-                Agendamento disponível em breve
+                <Play size={18} />
+                {pendingLeads.length === 0 ? 'Sem leads pendentes' : `Iniciar AutoPilot — ${pendingLeads.length} leads`}
               </button>
             </div>
           </div>
-        </div>
+        )}
       </div>
     );
   };
 
   const filterLead = (lead) => {
-    // Search filter (already handled by list passed to renderLeadsGrid if applicable, but we check here too)
+    if (!matchesLeadNameQuery(lead, gridFilters.nameQuery)) return false;
     
     if (gridFilters.source !== 'todos') {
       const isPlayStoreOnly = lead.tipo_origem === 'play_store' && !lead.developer_site;
@@ -2944,10 +4537,33 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     }
   };
 
+  const renderNameFilterInput = (placeholder = 'Filtrar por nome') => (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark/40 border border-white/5 min-w-[220px]">
+      <Search size={14} className="text-slate-500 shrink-0" />
+      <input
+        type="search"
+        value={gridFilters.nameQuery}
+        onChange={(e) => setGridFilters({ ...gridFilters, nameQuery: e.target.value })}
+        placeholder={placeholder}
+        className="bg-transparent text-xs font-semibold text-slate-300 placeholder:text-slate-600 focus:outline-none w-full"
+      />
+      {gridFilters.nameQuery && (
+        <button
+          type="button"
+          onClick={() => setGridFilters({ ...gridFilters, nameQuery: '' })}
+          className="text-slate-500 hover:text-white transition-colors"
+          title="Limpar filtro por nome"
+        >
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  );
+
   const renderSystemAppsGrid = (list) => {
     let filteredList = list
       .filter(filterLead)
-      .sort((a, b) => getCommercialScore(b, 'sistema') - getCommercialScore(a, 'sistema'));
+      .sort(sortByInsertedAtAsc);
     if (wppFilter) filteredList = filteredList.filter(l => !l.wpp_enviado);
 
     const totalItems = filteredList.length;
@@ -3005,6 +4621,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         </div>
 
         <div className="mb-6 p-4 rounded-3xl bg-white/[0.03] border border-white/5 flex flex-wrap gap-4 items-center">
+          {renderNameFilterInput('Filtrar sistema ou app')}
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark/40 border border-white/5 min-w-[150px]">
             <Globe size={14} className="text-slate-500" />
             <select
@@ -3025,17 +4642,9 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
           >
             <Mail size={14} /> E-mail Capturado
           </button>
-          <button
-            onClick={() => setGridFilters({ ...gridFilters, highOpportunity: !gridFilters.highOpportunity })}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-bold transition-all ${
-              gridFilters.highOpportunity ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-dark/40 text-slate-500 border-white/5 hover:text-slate-300'
-            }`}
-          >
-            <Target size={14} /> Alta Oportunidade
-          </button>
-          {(gridFilters.source !== 'todos' || gridFilters.hasEmail || gridFilters.highOpportunity) && (
+          {(gridFilters.nameQuery || gridFilters.source !== 'todos' || gridFilters.hasEmail || gridSort.col) && (
             <button
-              onClick={() => setGridFilters({ source: 'todos', date: 'todos', hasEmail: false, hasWpp: false, wppSent: false, highOpportunity: false, followupDue: false })}
+              onClick={() => { setGridFilters(DEFAULT_GRID_FILTERS); setGridSort({ col: null, dir: null }); }}
               className="text-xs font-bold text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors ml-auto"
             >
               <X size={14} /> Limpar Filtros
@@ -3174,13 +4783,228 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     );
   };
 
+  const renderCrmDashboard = () => {
+    const queue = validatedLeadsGrid
+      .map(lead => ({ ...lead, _typeCode: lead._typeCode || 'sites' }))
+      .filter(lead => matchesLeadNameQuery(lead, gridFilters.nameQuery))
+      .sort(sortByInsertedAtAsc);
+    const due = queue.filter(isFollowupDue).length;
+    const contacted = queue.filter(lead => lead.email_enviado || lead.wpp_enviado).length;
+    const responded = queue.filter(lead => lead.respondeu_email || lead.retorno_wpp).length;
+
+    return (
+      <div className="animate-fade-in space-y-5">
+        <header className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
+          <div>
+            <p className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.13em] mb-2">Comercial</p>
+            <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">CRM Operacional</h1>
+            <p className="text-slate-400 text-sm mt-2 max-w-3xl">Acompanhe leads validados, follow-ups, status do funil e próximas ações em uma fila única.</p>
+          </div>
+          <button onClick={() => openOperationalQueue('followups')} className="premium-btn primary">
+            <Clock size={16} /> Ver follow-ups
+          </button>
+        </header>
+
+        <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[
+            ['Leads no CRM', queue.length, <Users size={18} />, 'primary'],
+            ['Follow-ups', due, <Clock size={18} />, due > 0 ? 'danger' : 'success'],
+            ['Abordados', contacted, <Send size={18} />, 'warning'],
+            ['Responderam', responded, <MessageCircle size={18} />, 'success']
+          ].map(([label, value, icon, color]) => (
+            <article key={label} className="premium-card p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-extrabold text-slate-400 uppercase">{label}</span>
+                <span className={`premium-badge ${color}`}>{icon}</span>
+              </div>
+              <strong className="block text-4xl text-white mt-4 leading-none">{value}</strong>
+            </article>
+          ))}
+        </section>
+
+        <section className="premium-panel p-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
+            <div>
+              <h2 className="text-xl font-extrabold">Fila Comercial</h2>
+              <p className="text-slate-400 text-sm mt-1">Ordenada por data e hora de inserção, do mais antigo ao mais recente.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center">
+              {renderNameFilterInput('Filtrar lead no CRM')}
+              <span className="premium-badge success">Score alto</span>
+              <span className="premium-badge primary">Contato pronto</span>
+              <span className="premium-badge danger">Follow-up vencido</span>
+            </div>
+          </div>
+
+          {queue.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-600/50 bg-surface-hover/40 py-14 px-6 text-center">
+              <h4 className="text-white font-bold text-lg mb-1">Nenhum lead validado no CRM.</h4>
+              <p className="text-slate-400 text-sm max-w-sm mx-auto">Valide leads capturados para montar sua rotina comercial.</p>
+              <button onClick={() => setActiveMenu('sites')} className="premium-btn primary mt-6">Abrir banco de sites</button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-border">
+              <table className="w-full min-w-[860px] text-left text-sm">
+                <thead className="bg-surface-hover/80 text-[11px] uppercase tracking-[0.08em] text-slate-500">
+                  <tr>
+                    <th className="px-5 py-4">Lead</th>
+                    <th className="px-5 py-4">Score</th>
+                    <th className="px-5 py-4">Funil</th>
+                    <th className="px-5 py-4">Follow-up</th>
+                    <th className="px-5 py-4">Contato</th>
+                    <th className="px-5 py-4 text-right">Ação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {queue.slice(0, 30).map(lead => {
+                    const typeCode = lead._typeCode || 'sites';
+                    const followup = getFollowupStatus(lead);
+                    const score = getCommercialScore(lead, typeCode);
+                    return (
+                      <tr key={`${typeCode}-${lead.id}`} className="hover:bg-surface-hover/50 transition-colors">
+                        <td className="px-5 py-4">
+                          <p className="font-bold text-white">{getLeadName(lead)}</p>
+                          <p className="text-xs text-slate-500 mt-1">{getLeadCategory(lead, typeCode)}</p>
+                        </td>
+                        <td className="px-5 py-4"><span className={`premium-badge ${score >= 78 ? 'success' : 'primary'}`}>{score}/100</span></td>
+                        <td className="px-5 py-4"><span className="premium-badge accent">{FUNIL_STAGES.find(stage => stage.value === lead.funil_status)?.label || 'Novo'}</span></td>
+                        <td className="px-5 py-4"><span className={`premium-badge ${followup.state === 'overdue' || followup.state === 'today' ? 'danger' : 'primary'}`}>{followup.label}</span></td>
+                        <td className="px-5 py-4 text-slate-400 text-xs">{lead.email || lead.telefone || 'Contato pendente'}</td>
+                        <td className="px-5 py-4 text-right">
+                          <button onClick={() => openCrmModal(lead, typeCode)} className="premium-btn">Abrir CRM</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  };
+
+  const renderPropostasDashboard = () => {
+    const proposals = validatedLeadsGrid
+      .map(lead => ({ ...lead, _typeCode: lead._typeCode || 'sites' }))
+      .filter(lead => lead.is_validated || hasGeneratedLayout(lead) || getCommercialScore(lead, lead._typeCode) >= 70)
+      .filter(lead => matchesLeadNameQuery(lead, gridFilters.nameQuery))
+      .sort(sortByInsertedAtAsc);
+    const ready = proposals.filter(hasGeneratedLayout).length;
+    const pending = Math.max(proposals.length - ready, 0);
+
+    return (
+      <div className="animate-fade-in space-y-5">
+        <header className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
+          <div>
+            <p className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.13em] mb-2">Propostas</p>
+            <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Propostas Visuais</h1>
+            <p className="text-slate-400 text-sm mt-2 max-w-3xl">Gere, abra e use layouts/protótipos como apoio para abordagens comerciais.</p>
+          </div>
+          <button onClick={() => setActiveMenu('validados')} className="premium-btn">
+            <CheckCircle size={16} /> Leads validados
+          </button>
+        </header>
+
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <article className="premium-card p-5">
+            <span className="text-xs font-extrabold text-slate-400 uppercase">Elegíveis</span>
+            <strong className="block text-4xl text-white mt-4 leading-none">{proposals.length}</strong>
+          </article>
+          <article className="premium-card p-5">
+            <span className="text-xs font-extrabold text-slate-400 uppercase">Prontas</span>
+            <strong className="block text-4xl text-white mt-4 leading-none">{ready}</strong>
+          </article>
+          <article className="premium-card p-5">
+            <span className="text-xs font-extrabold text-slate-400 uppercase">Pendentes</span>
+            <strong className="block text-4xl text-white mt-4 leading-none">{pending}</strong>
+          </article>
+        </section>
+
+        <section className="premium-panel p-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
+            <div>
+              <h2 className="text-xl font-extrabold">Pipeline de propostas</h2>
+              <p className="text-slate-400 text-sm mt-1">Filtre por nome e acompanhe os leads em ordem crescente de inserção.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center">
+              {renderNameFilterInput('Filtrar proposta por nome')}
+              <span className="premium-badge warning"><Rocket size={14} /> Pronto para demonstração</span>
+            </div>
+          </div>
+
+          {proposals.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-600/50 bg-surface-hover/40 py-14 px-6 text-center">
+              <h4 className="text-white font-bold text-lg mb-1">Nenhuma proposta elegível ainda.</h4>
+              <p className="text-slate-400 text-sm max-w-sm mx-auto">Valide leads ou gere layouts para alimentar esta fila.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {proposals.slice(0, 24).map(lead => {
+                const typeCode = lead._typeCode || 'sites';
+                const readyLayout = hasGeneratedLayout(lead);
+                return (
+                  <article key={`${typeCode}-${lead.id}`} className="premium-card p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <h3 className="text-white font-extrabold truncate">{getLeadName(lead)}</h3>
+                        <p className="text-xs text-slate-500 mt-1 truncate">{lead.url || lead.website || lead.email || 'Lead validado'}</p>
+                      </div>
+                      <span className={`premium-badge ${readyLayout ? 'success' : 'warning'}`}>{readyLayout ? 'Pronta' : 'Pendente'}</span>
+                    </div>
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <span className="premium-badge primary">Score {getCommercialScore(lead, typeCode)}/100</span>
+                      <span className="premium-badge">{getLeadCategory(lead, typeCode)}</span>
+                    </div>
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      {readyLayout ? (
+                        <>
+                          <button onClick={() => openLeadLayoutAsset(lead, 'preview')} className="premium-btn primary">Abrir preview</button>
+                          <button onClick={() => openLeadLayoutAsset(lead, 'folder')} className="premium-btn">Abrir pasta</button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => handleGenerateLayout(lead, typeCode)}
+                          disabled={layoutGeneratingLeadId === lead.id}
+                          className="premium-btn primary disabled:opacity-60"
+                        >
+                          <LayoutTemplate size={16} /> {layoutGeneratingLeadId === lead.id ? 'Gerando...' : 'Gerar proposta'}
+                        </button>
+                      )}
+                      <button onClick={() => openCrmModal(lead, typeCode)} className="premium-btn">CRM</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  };
+
   const renderLeadsGrid = (list, typeTitle, typeCode) => {
     if (typeCode === 'sistema') return renderSystemAppsGrid(list);
     // Aplicar filtros avançados
-    let filteredList = list
-      .filter(filterLead)
-      .sort((a, b) => getCommercialScore(b, b._typeCode || typeCode) - getCommercialScore(a, a._typeCode || typeCode));
-    
+    let filteredList = list.filter(filterLead);
+
+    if (gridSort.col === 'nome') {
+      filteredList = [...filteredList].sort((a, b) => {
+        const na = (a.nome || a.titulo || a.url || '').toLowerCase();
+        const nb = (b.nome || b.titulo || b.url || '').toLowerCase();
+        return gridSort.dir === 'asc' ? na.localeCompare(nb, 'pt-BR') : nb.localeCompare(na, 'pt-BR');
+      });
+    } else if (gridSort.col === 'oportunidade') {
+      filteredList = [...filteredList].sort((a, b) => {
+        const sa = getCommercialScore(a, a._typeCode || typeCode) || 0;
+        const sb = getCommercialScore(b, b._typeCode || typeCode) || 0;
+        return gridSort.dir === 'asc' ? sa - sb : sb - sa;
+      });
+    } else {
+      filteredList = filteredList.sort(sortByInsertedAtAsc);
+    }
+
     // Filtro WPP Legado
     if (wppFilter) filteredList = filteredList.filter(l => !l.wpp_enviado);
 
@@ -3208,7 +5032,16 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     return (
       <div className="p-8 animate-fade-in h-full flex flex-col bg-surface">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-3xl font-bold text-white">{typeTitle}</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-3xl font-bold text-white">{typeTitle}</h2>
+            <button
+              onClick={() => setIsCompact(p => !p)}
+              title={isCompact ? 'Modo confortável' : 'Modo compacto'}
+              className={`p-2 rounded-xl border transition-all text-xs font-bold ${isCompact ? 'bg-primary/20 border-primary/40 text-primary' : 'bg-white/5 border-white/10 text-slate-500 hover:bg-white/10'}`}
+            >
+              {isCompact ? '≡' : '⊟'}
+            </button>
+          </div>
           <div className="flex gap-3 flex-wrap items-center">
             <button 
               onClick={() => handleBulkAnalysis(filteredList, typeCode)}
@@ -3243,6 +5076,25 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               title={selectedCount > 0 ? 'Exportar leads selecionados para Excel' : 'Exportar leads filtrados para Excel'}
             >
               <Download size={16} /> Excel ({selectedCount > 0 ? selectedCount : filteredList.length})
+            </button>
+            <button
+              onClick={async () => {
+                const rows = (selectedCount > 0 ? selectedInGrid : filteredList).map(l => ({
+                  nome: l.nome || l.titulo || '', url: l.url || l.site_oficial || '',
+                  email: l.email || '', telefone: l.telefone || '',
+                  nicho: l.nicho || l.categoria || l.app_category || '',
+                  localizacao: l.localizacao || '', status: l.funil_status || 'novo',
+                  validado: l.is_validated ? 'Sim' : 'Não', data_coleta: l.data_coleta || ''
+                }));
+                const res = await window.electronAPI.exportLeadsCsv?.(rows, `leads_${typeCode}_${new Date().toISOString().slice(0,10)}.csv`);
+                if (res?.success) showToast('CSV exportado com sucesso');
+                else if (res?.error !== 'cancelled') showToast('Erro ao exportar CSV', 'error');
+              }}
+              disabled={filteredList.length === 0}
+              className="bg-teal-500/20 text-teal-300 border border-teal-500/45 hover:bg-teal-500 hover:text-white px-5 py-2.5 rounded-xl transition-all font-semibold text-sm flex items-center gap-2 disabled:opacity-50"
+              title="Exportar para CSV"
+            >
+              <FileText size={16} /> CSV
             </button>
 
             {typeCode === 'sites' && (
@@ -3331,6 +5183,14 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                 Analisar selecionados
               </button>
               <button
+                onClick={() => handleBulkDeleteSelected(selectedInGrid, typeCode)}
+                disabled={bulkProgress !== null}
+                className="px-4 py-2 rounded-xl bg-red-500/15 border border-red-500/35 text-red-300 hover:bg-red-500 hover:text-white text-xs font-bold transition-all disabled:opacity-50 flex items-center gap-1.5"
+                title="Excluir os leads selecionados deste grid"
+              >
+                <Trash2 size={14} /> Excluir selecionados
+              </button>
+              <button
                 onClick={() => setSelectedLeadKeys([])}
                 className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 text-xs font-bold transition-all"
               >
@@ -3342,6 +5202,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
         {/* Barra de Filtros Avançados */}
         <div className="mb-6 p-4 rounded-3xl bg-white/[0.03] border border-white/5 flex flex-wrap gap-4 items-center">
+          {renderNameFilterInput('Filtrar por nome')}
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark/40 border border-white/5 min-w-[150px]">
             <Globe size={14} className="text-slate-500" />
             <select 
@@ -3403,17 +5264,6 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
           </button>
 
           <button
-            onClick={() => setGridFilters({...gridFilters, highOpportunity: !gridFilters.highOpportunity})}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-bold transition-all ${
-              gridFilters.highOpportunity
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                : 'bg-dark/40 text-slate-500 border-white/5 hover:text-slate-300'
-            }`}
-          >
-            <Target size={14} /> Alta Oportunidade
-          </button>
-
-          <button
             onClick={() => setGridFilters({...gridFilters, followupDue: !gridFilters.followupDue})}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-bold transition-all ${
               gridFilters.followupDue
@@ -3438,11 +5288,12 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
             <ListFilter size={14} /> Pendentes WPP
           </button>
 
-          {(gridFilters.source !== 'todos' || gridFilters.date !== 'todos' || gridFilters.hasEmail || gridFilters.hasWpp || gridFilters.wppSent || gridFilters.highOpportunity || gridFilters.followupDue || wppFilter) && (
+          {(gridFilters.nameQuery || gridFilters.source !== 'todos' || gridFilters.date !== 'todos' || gridFilters.hasEmail || gridFilters.hasWpp || gridFilters.wppSent || gridFilters.followupDue || wppFilter || gridSort.col) && (
             <button
               onClick={() => {
-                setGridFilters({source: 'todos', date: 'todos', hasEmail: false, hasWpp: false, wppSent: false, highOpportunity: false, followupDue: false});
+                setGridFilters(DEFAULT_GRID_FILTERS);
                 setWppFilter(false);
+                setGridSort({ col: null, dir: null });
               }}
               className="text-xs font-bold text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors ml-auto"
             >
@@ -3516,9 +5367,31 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     title="Selecionar página atual"
                   />
                 </th>
-                <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Nome / URL</th>
+                <th
+                  className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)] cursor-pointer select-none hover:text-white transition-colors"
+                  onClick={() => cycleSort('nome')}
+                  title="Ordenar por nome"
+                >
+                  <span className="flex items-center gap-1.5">
+                    Nome / URL
+                    {gridSort.col === 'nome' && gridSort.dir === 'asc' && <ChevronUp size={12} className="text-primary" />}
+                    {gridSort.col === 'nome' && gridSort.dir === 'desc' && <ChevronDown size={12} className="text-primary" />}
+                    {gridSort.col !== 'nome' && <ChevronsUpDown size={12} className="opacity-30" />}
+                  </span>
+                </th>
                 <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Contato</th>
-                <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Oportunidade</th>
+                <th
+                  className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)] cursor-pointer select-none hover:text-white transition-colors"
+                  onClick={() => cycleSort('oportunidade')}
+                  title="Ordenar por score de oportunidade"
+                >
+                  <span className="flex items-center gap-1.5">
+                    Oportunidade
+                    {gridSort.col === 'oportunidade' && gridSort.dir === 'asc' && <ChevronUp size={12} className="text-primary" />}
+                    {gridSort.col === 'oportunidade' && gridSort.dir === 'desc' && <ChevronDown size={12} className="text-primary" />}
+                    {gridSort.col !== 'oportunidade' && <ChevronsUpDown size={12} className="opacity-30" />}
+                  </span>
+                </th>
                 <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Próxima ação</th>
                 <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Status</th>
                 <th className="px-6 py-5 text-right sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Ações</th>
@@ -3539,7 +5412,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                       <div className="flex flex-wrap justify-center gap-2 mt-5">
                         <button
                           onClick={() => {
-                            setGridFilters({source: 'todos', date: 'todos', hasEmail: false, hasWpp: false, wppSent: false, highOpportunity: false, followupDue: false});
+                            setGridFilters(DEFAULT_GRID_FILTERS);
                             setWppFilter(false);
                           }}
                           className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 text-xs font-bold"
@@ -3568,7 +5441,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   const isSelected = selectedLeadKeys.includes(selectionKey);
                   return (
                   <tr key={`${rowTypeCode}-${lead.id}`} className={`hover:bg-white/5 transition-colors ${isSelected ? 'bg-primary/10' : lead.is_pinned ? 'bg-primary/5' : ''}`}>
-                    <td className="px-6 py-4">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -3577,7 +5450,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                         title="Selecionar lead"
                       />
                     </td>
-                    <td className="px-6 py-4">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <div className="flex items-center gap-2">
                         {lead.tipo_origem === 'play_store' ? (
                           <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400" title="Play Store">
@@ -3626,7 +5499,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                         </button>
                       )}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <div className="flex flex-col gap-2">
                         {lead.email_enviado ? (
                           <div className="flex flex-col gap-0.5">
@@ -3675,7 +5548,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                         </label>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <div className="flex items-center gap-2">
                         <div className={`w-11 h-9 rounded-xl flex items-center justify-center font-black text-xs border ${opportunity.bg} ${opportunity.color} ${opportunity.border}`}>
                           {commercialScore}
@@ -3686,13 +5559,13 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <div className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${nextAction.color}`}>
                         {nextAction.icon}
                         {nextAction.label}
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <div className="flex flex-col gap-1">
                         {lead.is_validated ? (
                           <span className="inline-flex items-center gap-1 bg-primary/20 text-primary text-[10px] px-2 py-0.5 rounded-md font-medium w-max">Validado</span>
@@ -3716,7 +5589,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                       )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'} text-right`}>
                       <div className="flex items-center justify-end gap-2">
                         <button 
                           onClick={() => handleOpenDetails(lead)}
@@ -3907,7 +5780,9 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     if (!leadDetailsModal) return null;
     const lead = leadDetailsModal;
     const detailTypeCode = lead._typeCode || 'sites';
-    const commercialScore = getCommercialScore(lead, detailTypeCode);
+    const leadKey = `${detailTypeCode}-${lead.id}`;
+    const rawScore = getCommercialScore(lead, detailTypeCode);
+    const commercialScore = scoreOverrides[leadKey] ?? rawScore;
     const opportunity = getOpportunityLevel(commercialScore);
     const nextAction = getNextBestAction(lead, detailTypeCode);
     const contactEmails = getUniqueContactEmails([{ email: lead.email, fonte: 'Lead' }, ...leadContacts]);
@@ -3950,6 +5825,31 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nicho / Categoria</span>
                   <p className="text-primary font-semibold">{getLeadCategory(lead)}</p>
+                  {!lead.nicho && lead.app_category && (() => {
+                    const NICHO_MAP = {
+                      dental: 'saúde', odonto: 'saúde', health: 'saúde', saude: 'saúde', clinica: 'saúde', medico: 'saúde',
+                      advocacia: 'juridico', advogado: 'juridico', juridico: 'juridico', law: 'juridico',
+                      academia: 'fitness', fitness: 'fitness', gym: 'fitness',
+                      restaurant: 'restaurante', comida: 'restaurante', food: 'restaurante',
+                      beleza: 'beleza', hair: 'beleza', nail: 'beleza', estetica: 'beleza',
+                      contabil: 'contabilidade', contador: 'contabilidade', accounting: 'contabilidade',
+                    };
+                    const cat = (lead.app_category || '').toLowerCase();
+                    const inferred = Object.entries(NICHO_MAP).find(([k]) => cat.includes(k))?.[1];
+                    if (!inferred) return null;
+                    return (
+                      <button
+                        onClick={async () => {
+                          const table = detailTypeCode === 'sites' ? 'leads_sites' : 'leads_sistemas';
+                          await window.electronAPI.updateLeadSite?.(lead.id, { nicho: inferred });
+                          showToast(`Nicho "${inferred}" aplicado`, 'success', 2000);
+                        }}
+                        className="text-[10px] text-amber-300 font-bold bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-lg hover:bg-amber-500/20 transition-all"
+                      >
+                        Detectado: {inferred} — aplicar
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -3977,6 +5877,55 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     >
                       <Zap size={14} /> Fazer agora
                     </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* T13 — Score override + T14 — Ticket value */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Score ajustado</span>
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      type="number" min="0" max="100"
+                      placeholder={String(rawScore)}
+                      value={scoreOverrides[leadKey] ?? ''}
+                      onChange={e => {
+                        const v = e.target.value === '' ? undefined : Number(e.target.value);
+                        setScoreOverrides(p => ({ ...p, [leadKey]: v }));
+                      }}
+                      className="flex-1 bg-dark/40 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 w-full"
+                    />
+                    <button
+                      onClick={async () => {
+                        const v = scoreOverrides[leadKey];
+                        const table = detailTypeCode === 'sistema' ? 'leads_sistemas' : 'leads_sites';
+                        await window.electronAPI.saveScoreOverride?.(table, lead.id, v ?? null);
+                        showToast(v != null ? `Score ajustado para ${v}` : 'Score restaurado');
+                      }}
+                      className="px-3 py-2 rounded-xl bg-primary/20 text-primary hover:bg-primary hover:text-white text-xs font-bold transition-all"
+                    >Salvar</button>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Valor estimado do contrato</span>
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      type="number" min="0" step="100"
+                      placeholder="R$ 0"
+                      value={ticketValues[leadKey] ?? (lead.ticket_value || '')}
+                      onChange={e => setTicketValues(p => ({ ...p, [leadKey]: e.target.value === '' ? undefined : Number(e.target.value) }))}
+                      className="flex-1 bg-dark/40 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40 w-full"
+                    />
+                    <button
+                      onClick={async () => {
+                        const v = ticketValues[leadKey];
+                        const table = detailTypeCode === 'sistema' ? 'leads_sistemas' : 'leads_sites';
+                        await window.electronAPI.saveTicketValue?.(table, lead.id, v ?? null);
+                        showToast('Valor salvo');
+                      }}
+                      className="px-3 py-2 rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500 hover:text-white text-xs font-bold transition-all"
+                    >Salvar</button>
                   </div>
                 </div>
               </div>
@@ -4197,7 +6146,421 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   {layoutGeneratingLeadId === lead.id ? 'Gerando...' : hasGeneratedLayout(lead) ? 'Abrir Preview' : 'Gerar Layout'}
                 </button>
               </div>
+
+              {getLeadUrl(lead) && (
+                <div className="pt-2">
+                  <button
+                    onClick={() => handleAnalyzeProblems(lead, detailTypeCode)}
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-red-500/10 border border-red-500/25 text-red-300 hover:bg-red-500/20 hover:border-red-500/40 font-bold text-sm transition-all"
+                  >
+                    <AlertTriangle size={16} />
+                    Diagnóstico de Problemas do Site
+                  </button>
+                </div>
+              )}
+              <div className="pt-1">
+                <button
+                  onClick={async () => {
+                    const res = await window.electronAPI.searchLinkedinForLead?.(lead, detailTypeCode);
+                    if (res?.success && res.results?.length > 0) {
+                      setAppDialog({
+                        title: 'Decisores encontrados no LinkedIn',
+                        message: res.results.map(r => `• ${r.nome || r.name} — ${r.cargo || r.headline || ''}`).join('\n'),
+                        type: 'info'
+                      });
+                    } else {
+                      setAppDialog({ title: 'Busca LinkedIn', message: res?.error || 'Nenhum decisor encontrado para este lead.', type: 'info' });
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-blue-500/10 border border-blue-500/25 text-blue-300 hover:bg-blue-500/20 hover:border-blue-500/40 font-bold text-sm transition-all"
+                >
+                  <Linkedin size={16} />
+                  Buscar Decisor no LinkedIn
+                </button>
+              </div>
+
+              {/* T18 — PageSpeed inline */}
+              {getLeadUrl(lead) && (
+                <div className="pt-1">
+                  {pageSpeedData[getLeadUrl(lead)] ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">PageSpeed API (mobile)</span>
+                      <div className="grid grid-cols-2 gap-3 mt-3">
+                        {[
+                          { label: 'Performance', val: pageSpeedData[getLeadUrl(lead)].performance },
+                          { label: 'SEO', val: pageSpeedData[getLeadUrl(lead)].seo },
+                          { label: 'Acessibilidade', val: pageSpeedData[getLeadUrl(lead)].accessibility },
+                          { label: 'Boas práticas', val: pageSpeedData[getLeadUrl(lead)].bestPractices },
+                        ].map(m => (
+                          <div key={m.label}>
+                            <p className="text-xs text-slate-500">{m.label}</p>
+                            <p className={`text-lg font-black ${m.val >= 70 ? 'text-emerald-400' : m.val >= 50 ? 'text-amber-400' : 'text-red-400'}`}>{m.val}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {pageSpeedData[getLeadUrl(lead)].lcp && <p className="text-xs text-slate-600 mt-2">LCP: {pageSpeedData[getLeadUrl(lead)].lcp} · CLS: {pageSpeedData[getLeadUrl(lead)].cls}</p>}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        const url = getLeadUrl(lead);
+                        const res = await window.electronAPI.pagespeedCheck?.(url);
+                        if (res?.success) setPageSpeedData(p => ({ ...p, [url]: res }));
+                        else showToast(res?.error || 'Falha ao consultar PageSpeed', 'error');
+                      }}
+                      className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 font-bold text-sm transition-all"
+                    >
+                      <Activity size={16} /> Consultar PageSpeed Google (mobile)
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* T07 — Histórico de e-mails */}
+              {(() => {
+                const hist = emailHistory.filter(h => h.lead_id === lead.id && h.lead_tipo === (detailTypeCode === 'sites' ? 'sites' : 'sistema'));
+                if (hist.length === 0) return null;
+                return (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Histórico de e-mails ({hist.length})</span>
+                    <div className="mt-3 space-y-2">
+                      {hist.slice(0, 5).map(h => (
+                        <div key={h.id} className="flex items-start gap-2 text-xs text-slate-400">
+                          <Mail size={12} className="shrink-0 mt-0.5 text-slate-500" />
+                          <div className="min-w-0">
+                            <p className="text-white font-semibold truncate">{h.subject || 'Sem assunto'}</p>
+                            <p className="truncate">{h.to_email} · {new Date(h.sent_at).toLocaleString('pt-BR', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderProblemsModal = () => {
+    if (!problemsModal) return null;
+    const { lead, problems, loading, score } = problemsModal;
+    const companyName = lead.nome || lead.titulo || lead.empresa || 'este lead';
+    const transformed = (problems || []).map(transformProblemForSales);
+
+    const iconFor = (type) => {
+      if (type === 'perf') return <Activity size={16} />;
+      if (type === 'seo') return <Globe size={16} />;
+      if (type === 'mobile') return <Smartphone size={16} />;
+      return <Target size={16} />;
+    };
+    const colorFor = (type) => {
+      if (type === 'perf') return { bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: 'bg-orange-500/15 text-orange-300', label: 'text-orange-200' };
+      if (type === 'seo') return { bg: 'bg-blue-500/10', border: 'border-blue-500/20', icon: 'bg-blue-500/15 text-blue-300', label: 'text-blue-200' };
+      if (type === 'mobile') return { bg: 'bg-purple-500/10', border: 'border-purple-500/20', icon: 'bg-purple-500/15 text-purple-300', label: 'text-purple-200' };
+      return { bg: 'bg-red-500/10', border: 'border-red-500/20', icon: 'bg-red-500/15 text-red-300', label: 'text-red-200' };
+    };
+
+    const scoreColor = score == null ? '' : score <= 40 ? 'text-red-400' : score <= 65 ? 'text-amber-400' : 'text-emerald-400';
+    const scoreLabel = score == null ? '' : score <= 40 ? 'Crítico' : score <= 65 ? 'Precisa de atenção' : 'Razoável';
+
+    return (
+      <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-dark/80 backdrop-blur-sm animate-fade-in" onClick={() => setProblemsModal(null)}>
+        <div
+          className="bg-[#0f172a] border border-white/10 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col scale-in"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between px-7 py-6 border-b border-white/10 shrink-0">
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <div className="p-2 rounded-xl bg-red-500/10 text-red-400">
+                  <AlertTriangle size={20} />
+                </div>
+                <h3 className="text-white font-bold text-lg">Diagnóstico do Site</h3>
+              </div>
+              <p className="text-slate-500 text-xs mt-1">
+                Problemas identificados em <span className="text-slate-300 font-semibold">{companyName}</span> com impacto direto na geração de contatos.
+              </p>
+            </div>
+            <button onClick={() => setProblemsModal(null)} className="p-2 rounded-xl hover:bg-white/10 text-slate-400 transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto px-7 py-6 flex flex-col gap-5 custom-scrollbar">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center gap-4 py-16 text-slate-400">
+                <Loader2 size={32} className="animate-spin text-primary" />
+                <p className="text-sm font-medium">Analisando o site com Puppeteer...</p>
+                <p className="text-xs text-slate-600">Isso pode levar até 30 segundos</p>
+              </div>
+            ) : (
+              <>
+                {score != null && (
+                  <div className="flex items-center gap-4 bg-white/[0.04] border border-white/10 rounded-2xl p-4">
+                    <div className="text-center min-w-[64px]">
+                      <p className={`text-4xl font-black ${scoreColor}`}>{score}</p>
+                      <p className={`text-[10px] font-bold uppercase tracking-wider mt-0.5 ${scoreColor}`}>{scoreLabel}</p>
+                    </div>
+                    <div>
+                      <p className="text-white font-semibold text-sm">Score técnico do site</p>
+                      <p className="text-slate-400 text-xs mt-1 leading-relaxed">
+                        Pontuação calculada com base em Performance, SEO, UX e Mobile. Quanto menor, maior a oportunidade de venda.
+                      </p>
+                    </div>
+                    <TrendingDown size={28} className={`ml-auto shrink-0 ${scoreColor}`} />
+                  </div>
+                )}
+
+                {transformed.length === 0 && (
+                  <div className="text-center py-10 text-slate-500">
+                    <CheckCircle size={32} className="mx-auto mb-3 text-emerald-500" />
+                    <p className="font-semibold text-white">Nenhum problema crítico encontrado</p>
+                    <p className="text-xs mt-1">O site passou nos principais critérios técnicos.</p>
+                  </div>
+                )}
+
+                {transformed.map((p, i) => {
+                  const c = colorFor(p.icon);
+                  return (
+                    <div key={i} className={`rounded-2xl border ${c.bg} ${c.border} p-5`}>
+                      <div className="flex items-start gap-3">
+                        <div className={`p-2 rounded-xl shrink-0 ${c.icon}`}>
+                          {iconFor(p.icon)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`font-bold text-sm leading-snug ${c.label}`}>{p.impact}</p>
+                          <p className="text-slate-400 text-xs mt-2 leading-relaxed">{p.detail}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {transformed.length > 0 && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-5 mt-2">
+                    <p className="text-emerald-300 font-bold text-sm mb-1">
+                      {transformed.length} problema{transformed.length > 1 ? 's' : ''} identificado{transformed.length > 1 ? 's' : ''}
+                    </p>
+                    <p className="text-slate-400 text-xs leading-relaxed">
+                      Cada problema listado representa uma oportunidade perdida de converter visitantes em clientes. Use este diagnóstico como base para a abordagem comercial.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Footer */}
+          {!loading && transformed.length > 0 && (
+            <div className="px-7 py-5 border-t border-white/10 shrink-0 flex flex-col sm:flex-row gap-3 justify-end">
+              <button
+                onClick={() => setProblemsModal(null)}
+                className="px-5 py-2.5 rounded-xl bg-surface text-slate-300 border border-border-light hover:bg-white/5 font-semibold transition-all text-sm"
+              >
+                Fechar
+              </button>
+              <button
+                disabled={pdfGenerating}
+                onClick={async () => {
+                  setPdfGenerating(true);
+                  try {
+                    const breakdown = problemsModal.breakdown ? JSON.parse(problemsModal.breakdown) : null;
+                    await window.electronAPI.generateDiagnosticPdf?.({ lead, problems: problems || [], score: score || 0, breakdown });
+                  } catch (_) {}
+                  setPdfGenerating(false);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-white font-bold transition-all text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {pdfGenerating ? <Loader2 size={15} className="animate-spin" /> : <FileText size={15} />} Gerar PDF
+              </button>
+              <button
+                onClick={() => {
+                  setProblemsModal(null);
+                  handleSingleEmail(lead, lead._typeCode || 'sites');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500 hover:text-white font-bold transition-all text-sm flex items-center gap-2"
+              >
+                <Mail size={15} /> Usar no e-mail
+              </button>
+              <button
+                onClick={() => {
+                  setProblemsModal(null);
+                  startWhatsappMessageFlow(lead, lead._typeCode || 'sites');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-green-500/20 text-green-300 border border-green-500/40 hover:bg-green-500 hover:text-white font-bold transition-all text-sm flex items-center gap-2"
+              >
+                <MessageCircle size={15} /> Abordar pelo WhatsApp
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderPostCaptureWppModal = () => {
+    if (!postCaptureWppModal) return null;
+    const { phase, leads, currentIdx, dispatched, skipped } = postCaptureWppModal;
+    const total = leads.length;
+    const currentLead = leads[currentIdx] || null;
+    const companyName = currentLead ? (currentLead.nome || currentLead.titulo || 'Lead') : '';
+    const wppUrl = currentLead
+      ? buildWhatsappUrl(currentLead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus')
+      : '';
+
+    const openAndAdvance = async () => {
+      if (wppUrl) await window.electronAPI.openExternalUrl(wppUrl);
+      setPostCaptureWppModal(prev => ({ ...prev, phase: 'dispatching' }));
+    };
+
+    return (
+      <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-dark/80 backdrop-blur-sm animate-fade-in">
+        <div className="bg-[#0f172a] border border-white/10 rounded-3xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden scale-in">
+
+          {/* Header */}
+          <div className="flex items-center gap-3 px-6 py-5 border-b border-white/10">
+            <div className="p-2 rounded-xl bg-green-500/10 text-green-400 shrink-0">
+              <MessageCircle size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-white font-bold text-base">Disparo via WhatsApp</h3>
+              <p className="text-slate-500 text-xs mt-0.5">
+                {phase === 'confirm' && `${total} lead${total > 1 ? 's' : ''} com telefone encontrado${total > 1 ? 's' : ''}`}
+                {phase === 'dispatching' && `${currentIdx + 1} de ${total} leads`}
+                {phase === 'done' && 'Disparo concluído'}
+              </p>
+            </div>
+            {phase !== 'dispatching' && (
+              <button onClick={() => setPostCaptureWppModal(null)} className="p-2 rounded-xl hover:bg-white/10 text-slate-400 transition-colors">
+                <X size={18} />
+              </button>
+            )}
+          </div>
+
+          {/* Body */}
+          <div className="px-6 py-6 flex flex-col gap-4">
+
+            {/* CONFIRM PHASE */}
+            {phase === 'confirm' && (
+              <>
+                <div className="bg-white/[0.04] border border-white/10 rounded-2xl p-4 text-sm text-slate-300 leading-relaxed">
+                  A captura finalizou com <span className="text-white font-bold">{total} lead{total > 1 ? 's' : ''}</span> com telefone disponível.
+                  <br className="mt-1" />
+                  Deseja iniciar o disparo de mensagens via WhatsApp agora?
+                </div>
+                <div className="max-h-40 overflow-y-auto custom-scrollbar flex flex-col gap-2">
+                  {leads.map((lead, i) => (
+                    <div key={i} className="flex items-center gap-3 px-3 py-2 rounded-xl bg-white/[0.03] border border-white/5 text-xs text-slate-300">
+                      <MessageCircle size={13} className="text-green-400 shrink-0" />
+                      <span className="flex-1 truncate font-medium">{lead.nome || lead.titulo || 'Lead'}</span>
+                      <span className="text-slate-500 truncate max-w-[120px]">{lead.telefone}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-3 mt-2">
+                  <button
+                    onClick={() => setPostCaptureWppModal(null)}
+                    className="flex-1 py-3 rounded-xl bg-surface border border-border-light text-slate-300 hover:bg-white/5 font-semibold text-sm transition-all"
+                  >
+                    Depois
+                  </button>
+                  <button
+                    onClick={openAndAdvance}
+                    className="flex-1 py-3 rounded-xl bg-green-500 text-white font-bold text-sm hover:bg-green-600 transition-all flex items-center justify-center gap-2"
+                  >
+                    <MessageCircle size={15} /> Iniciar disparo
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* DISPATCHING PHASE */}
+            {phase === 'dispatching' && currentLead && (
+              <>
+                {/* Progress bar */}
+                <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="bg-green-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${((currentIdx) / total) * 100}%` }}
+                  />
+                </div>
+
+                {/* Lead card */}
+                <div className="bg-white/[0.04] border border-white/10 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-xl bg-green-500/10 text-green-400 shrink-0">
+                      <MessageCircle size={16} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-bold text-sm truncate">{companyName}</p>
+                      {currentLead.localizacao && <p className="text-slate-500 text-xs">{currentLead.localizacao}</p>}
+                      <p className="text-green-300 font-mono text-xs mt-1">{currentLead.telefone}</p>
+                    </div>
+                  </div>
+                  <div className="bg-green-500/5 border border-green-500/15 rounded-xl p-3 text-xs text-slate-400 italic leading-relaxed">
+                    "{buildWhatsappUrl(currentLead, '').split('text=')[1] ? decodeURIComponent(buildWhatsappUrl(currentLead, '').split('text=')[1]).slice(0, 120) + '…' : 'Mensagem preparada.'}"
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      if (wppUrl) await window.electronAPI.openExternalUrl(wppUrl);
+                    }}
+                    className="flex-1 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 text-xs font-semibold transition-all flex items-center justify-center gap-2"
+                  >
+                    <MessageCircle size={13} /> Abrir WhatsApp
+                  </button>
+                  <button
+                    onClick={() => handlePostCaptureWppAction('skip')}
+                    className="px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:bg-white/10 text-xs font-semibold transition-all"
+                  >
+                    Pular
+                  </button>
+                  <button
+                    onClick={() => handlePostCaptureWppAction('send')}
+                    className="flex-1 py-3 rounded-xl bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500 hover:text-white text-xs font-bold transition-all flex items-center justify-center gap-2"
+                  >
+                    <Check size={13} /> Confirmei o envio
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setPostCaptureWppModal(prev => ({ ...prev, phase: 'done' }))}
+                  className="text-slate-600 hover:text-slate-400 text-xs text-center transition-colors mt-1"
+                >
+                  Encerrar disparo
+                </button>
+              </>
+            )}
+
+            {/* DONE PHASE */}
+            {phase === 'done' && (
+              <>
+                <div className="flex flex-col items-center gap-3 py-4 text-center">
+                  <div className="p-4 rounded-2xl bg-green-500/10 text-green-400">
+                    <CheckCircle size={32} />
+                  </div>
+                  <p className="text-white font-bold text-lg">Disparo concluído!</p>
+                  <p className="text-slate-400 text-sm">
+                    <span className="text-green-400 font-bold">{dispatched}</span> mensagem{dispatched !== 1 ? 's' : ''} confirmada{dispatched !== 1 ? 's' : ''}
+                    {skipped > 0 && <> · <span className="text-slate-500">{skipped} pulado{skipped !== 1 ? 's' : ''}</span></>}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPostCaptureWppModal(null)}
+                  className="w-full py-3 rounded-xl bg-green-500/20 border border-green-500/40 text-green-300 hover:bg-green-500 hover:text-white font-bold text-sm transition-all"
+                >
+                  Fechar
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -4255,6 +6618,131 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               }`}
             >
               {appDialog.type === 'confirm' ? appDialog.confirmLabel : 'OK'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDailyGoalModal = () => {
+    if (!dailyGoalModal) return null;
+    const val = Number(dailyGoalInput);
+    const isValid = val > 0 && val <= EMAIL_SAFE_DAILY_LIMIT;
+    return (
+      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="bg-[#0f172a] border border-white/10 rounded-3xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-white font-extrabold text-lg flex items-center gap-2">
+              <Target size={18} className="text-primary" /> Metas de Prospecção
+            </h3>
+            <button onClick={() => setDailyGoalModal(false)} className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 transition-colors"><X size={18} /></button>
+          </div>
+          <p className="text-slate-400 text-sm">Defina metas de envios diária, semanal e mensal para acompanhar seu ritmo de prospecção.</p>
+          <div>
+            <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Diária (máx: {EMAIL_SAFE_DAILY_LIMIT})</label>
+            <input
+              type="number"
+              min="1"
+              max={EMAIL_SAFE_DAILY_LIMIT}
+              value={dailyGoalInput}
+              onChange={e => setDailyGoalInput(e.target.value)}
+              placeholder={`Ex: 20`}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+              autoFocus
+            />
+            {dailyGoalInput && !isValid && (
+              <p className="text-red-400 text-xs mt-1.5">Valor deve ser entre 1 e {EMAIL_SAFE_DAILY_LIMIT}.</p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Semanal</label>
+              <input
+                type="number"
+                min="0"
+                value={weeklyGoal || ''}
+                onChange={e => setWeeklyGoal(Number(e.target.value) || 0)}
+                placeholder="Ex: 100"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wide">Mensal</label>
+              <input
+                type="number"
+                min="0"
+                value={monthlyGoal || ''}
+                onChange={e => setMonthlyGoal(Number(e.target.value) || 0)}
+                placeholder="Ex: 400"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+              />
+            </div>
+          </div>
+          <div className="flex gap-3">
+            {dailyGoal > 0 && (
+              <button
+                onClick={async () => {
+                  setDailyGoal(0);
+                  clearGoalHit();
+                  await window.electronAPI.setConfig('daily_goal', '0');
+                  setDailyGoalModal(false);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 text-xs font-bold transition-all"
+              >
+                Remover meta
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                if (!isValid) return;
+                setDailyGoal(val);
+                clearGoalHit();
+                await window.electronAPI.setConfig('daily_goal', String(val));
+                await window.electronAPI.setConfig('weekly_goal', String(weeklyGoal));
+                await window.electronAPI.setConfig('monthly_goal', String(monthlyGoal));
+                setDailyGoalModal(false);
+              }}
+              disabled={!isValid}
+              className="flex-1 px-4 py-2.5 rounded-xl bg-primary/20 border border-primary/40 text-primary hover:bg-primary hover:text-white text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Salvar metas
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderGoalReachedModal = () => {
+    if (!goalReachedModal) return null;
+    const cooldownMins = Math.ceil(getGoalCooldownRemaining() / 60000);
+    return (
+      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="bg-[#0f172a] border border-emerald-500/30 rounded-3xl shadow-2xl w-full max-w-md p-7 flex flex-col gap-5 text-center">
+          <div className="w-16 h-16 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 grid place-items-center mx-auto text-3xl">🎯</div>
+          <div>
+            <h3 className="text-white font-extrabold text-xl">Meta diária atingida!</h3>
+            <p className="text-slate-400 text-sm mt-2">
+              Você enviou <strong className="text-white">{sentTodayCount}</strong> e-mails hoje, atingindo sua meta de <strong className="text-white">{dailyGoal}</strong>.
+            </p>
+          </div>
+          <div className="bg-amber-500/10 border border-amber-500/25 rounded-2xl p-4 text-left">
+            <p className="text-amber-300 text-xs font-bold mb-1">⏱ Cooldown de 1 hora ativo</p>
+            <p className="text-slate-400 text-xs">Para proteger a reputação do e-mail e manter o ritmo saudável, novos envios ficam bloqueados por <strong className="text-white">{cooldownMins} minuto(s)</strong>. Após esse período, você poderá continuar enviando normalmente.</p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setGoalReachedModal(false)}
+              className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 text-sm font-bold transition-all"
+            >
+              Encerrar por hoje
+            </button>
+            <button
+              onClick={() => setGoalReachedModal(false)}
+              className="flex-1 px-4 py-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500 hover:text-white text-sm font-bold transition-all"
+            >
+              Entendido, aguardarei
             </button>
           </div>
         </div>
@@ -4344,14 +6832,103 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
   };
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-surface">
+    <div className="premium-shell bg-dark">
       {renderSidebar()}
-      
-      <main className="flex-1 overflow-hidden relative">
+
+      {/* T24 — Toast global */}
+      {isOffline && (
+        <div className="fixed top-0 left-0 right-0 z-[250] bg-amber-500 text-slate-900 text-xs font-bold flex items-center justify-center gap-2 py-2 animate-fade-in">
+          <AlertTriangle size={14} /> Sem conexão com a internet — funções de IA, e-mail e scraping indisponíveis.
+        </div>
+      )}
+
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-[200] px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 font-semibold text-sm animate-fade-in ${
+          toast.type === 'success' ? 'bg-emerald-500 text-white' :
+          toast.type === 'error' ? 'bg-red-500 text-white' :
+          'bg-slate-800 text-white border border-white/10'
+        }`}>
+          {toast.type === 'success' ? <Check size={16} /> : toast.type === 'error' ? <X size={16} /> : <Info size={16} />}
+          {toast.msg}
+        </div>
+      )}
+
+      {/* T21 — Command Palette */}
+      {cmdPalette.open && (
+        <div className="fixed inset-0 z-[150] flex items-start justify-center pt-24 bg-dark/70 backdrop-blur-sm animate-fade-in" onClick={() => setCmdPalette(p => ({ ...p, open: false }))}>
+          <div className="w-full max-w-xl bg-surface border border-white/15 rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10">
+              <Search size={18} className="text-slate-400" />
+              <input
+                autoFocus
+                className="flex-1 bg-transparent text-white placeholder-slate-500 outline-none text-sm"
+                placeholder="Buscar leads, nichos, e-mails..."
+                value={cmdPalette.query}
+                onChange={async (e) => {
+                  const q = e.target.value;
+                  setCmdPalette(p => ({ ...p, query: q }));
+                  if (q.length >= 2) {
+                    const res = await window.electronAPI.searchAllLeads?.(q);
+                    setCmdPalette(p => ({ ...p, results: res?.results || [] }));
+                  } else {
+                    setCmdPalette(p => ({ ...p, results: [] }));
+                  }
+                }}
+              />
+              <span className="text-[10px] text-slate-600 bg-white/5 px-2 py-1 rounded">Esc</span>
+            </div>
+            <div className="max-h-80 overflow-y-auto custom-scrollbar">
+              {cmdPalette.results.length === 0 && cmdPalette.query.length >= 2 && (
+                <p className="px-4 py-6 text-center text-slate-500 text-sm">Nenhum resultado para "{cmdPalette.query}"</p>
+              )}
+              {cmdPalette.results.length === 0 && cmdPalette.query.length < 2 && (
+                <div className="px-4 py-4 space-y-1">
+                  {[
+                    { key: 'N', label: 'Nova Captura', menu: 'nova-captura' },
+                    { key: 'D', label: 'Dashboard', menu: 'geral' },
+                    { key: 'L', label: 'Banco de Sites', menu: 'sites' },
+                  ].map(a => (
+                    <button key={a.key} onClick={() => { setActiveMenu(a.menu); setCmdPalette(p => ({ ...p, open: false })); }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 text-slate-300 text-sm transition-all text-left">
+                      <span className="text-[10px] font-black bg-white/10 px-1.5 py-0.5 rounded text-slate-500">{a.key}</span>
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {cmdPalette.results.map((lead, i) => (
+                <button key={i} onClick={() => { handleOpenDetails(lead); setCmdPalette(p => ({ ...p, open: false })); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-all text-left border-b border-white/5 last:border-0">
+                  <div className={`w-8 h-8 rounded-xl shrink-0 flex items-center justify-center text-[10px] font-black ${lead._typeCode === 'sites' ? 'bg-primary/15 text-primary' : lead._typeCode === 'sistema' ? 'bg-violet-500/15 text-violet-300' : 'bg-blue-500/15 text-blue-300'}`}>
+                    {lead._typeCode === 'sites' ? 'S' : lead._typeCode === 'sistema' ? 'A' : 'L'}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-white font-semibold text-sm truncate">{lead.nome || lead.titulo}</p>
+                    <p className="text-slate-500 text-xs truncate">{lead.url || lead.site_oficial || lead.email || lead.localizacao}</p>
+                  </div>
+                  <span className="ml-auto text-slate-600 text-xs shrink-0">↵</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="premium-main custom-scrollbar relative">
+        <button
+          type="button"
+          onClick={() => setMobileSidebarOpen(true)}
+          className="premium-btn mb-5 lg:hidden"
+        >
+          <ListFilter size={16} /> Menu
+        </button>
         {activeMenu === 'geral' && renderDashboard()}
         {activeMenu === 'nova-captura' && renderNovaCaptura()}
         {activeMenu === 'envios' && renderConfiguracoes()}
         {activeMenu === 'whatsapp-comercial' && renderWhatsappComercial()}
+        {activeMenu === 'crm' && renderCrmDashboard()}
+        {activeMenu === 'kanban' && renderKanban()}
+        {activeMenu === 'propostas' && renderPropostasDashboard()}
         
         {/* Grids mapping */}
         {activeMenu === 'sites' && renderLeadsGrid(siteLeadsGrid, 'Banco de Sites', 'sites')}
@@ -4360,8 +6937,12 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         {activeMenu === 'validados' && renderLeadsGrid(validatedLeadsGrid, 'Leads Validados', 'misto')}
 
         {renderLeadDetailsModal()}
+        {renderProblemsModal()}
+        {renderPostCaptureWppModal()}
         {renderAppDialog()}
         {renderOnboardingModal()}
+        {renderDailyGoalModal()}
+        {renderGoalReachedModal()}
       </main>
 
       {/* === CRM INTERACTIONS MODAL === */}
@@ -4512,38 +7093,55 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                 </div>
               </div>
 
-              {/* Timeline de interações */}
+              {/* T15 — Timeline de interações */}
               <div>
-                <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">
-                  Histórico &mdash; {crmModal.interacoes.length} registro{crmModal.interacoes.length !== 1 ? 's' : ''}
+                <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">
+                  Timeline &mdash; {crmModal.interacoes.length} evento{crmModal.interacoes.length !== 1 ? 's' : ''}
                 </p>
                 {crmModal.interacoes.length === 0 ? (
                   <p className="text-slate-600 text-sm text-center py-6">Nenhuma interação registrada ainda.</p>
                 ) : (
-                  <div className="flex flex-col gap-3">
-                    {crmModal.interacoes.map(item => (
-                      <div key={item.id} className="flex items-start gap-3 bg-white/5 rounded-xl p-3 border border-white/5 group">
-                        <div className="mt-0.5 shrink-0 w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                          {CANAL_ICONS[item.canal] || <FileText size={14} />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-white text-sm leading-snug">{item.descricao}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xs text-slate-500 capitalize">{item.canal}</span>
-                            <span className="text-slate-700">·</span>
-                            <span className="text-xs text-slate-500">
-                              {new Date(item.data_hora).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
-                            </span>
+                  <div className="relative">
+                    <div className="absolute left-[17px] top-2 bottom-2 w-px bg-gradient-to-b from-primary/40 via-white/10 to-transparent" />
+                    <div className="flex flex-col gap-0">
+                      {crmModal.interacoes.map((item, idx) => {
+                        const canalColors = {
+                          email: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
+                          whatsapp: 'text-green-400 bg-green-500/10 border-green-500/20',
+                          ligacao: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                          reuniao: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+                          nota: 'text-slate-400 bg-white/5 border-white/10',
+                          observacao: 'text-slate-400 bg-white/5 border-white/10',
+                        };
+                        const colorClass = canalColors[item.canal] || 'text-primary bg-primary/10 border-primary/20';
+                        return (
+                          <div key={item.id} className="relative flex items-start gap-4 pb-5 group">
+                            <div className={`relative z-10 shrink-0 w-9 h-9 rounded-full border flex items-center justify-center ${colorClass}`}>
+                              {CANAL_ICONS[item.canal] || <FileText size={15} />}
+                            </div>
+                            <div className="flex-1 min-w-0 pt-1.5">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1">
+                                  <p className="text-white text-sm leading-snug">{item.descricao}</p>
+                                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md capitalize border ${colorClass}`}>{item.canal}</span>
+                                    <span className="text-[10px] text-slate-500">
+                                      {new Date(item.data_hora).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
+                                    </span>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handleDeleteInteracao(item.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-500/20 hover:text-red-400 text-slate-600 transition-all shrink-0"
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteInteracao(item.id)}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-500/20 hover:text-red-400 text-slate-600 transition-all"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ))}
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -4616,12 +7214,25 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                 
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">E-mail vinculado</label>
+                    <label className="block text-sm font-medium text-slate-400 mb-2">
+                      {emailPreviewModal.leads.length === 1 ? 'E-mail destinatário' : 'E-mail vinculado'}
+                    </label>
                     <input
-                      type="text"
-                      readOnly
-                      value={emailPreviewModal.leads.length === 1 ? emailPreviewModal.leads[0].email : `${emailPreviewModal.leads.length} destinatários selecionados`}
-                      className="w-full bg-dark/60 border border-border-light rounded-xl px-4 py-3 text-white/90 focus:outline-none"
+                      type="email"
+                      readOnly={emailPreviewModal.leads.length !== 1}
+                      value={
+                        emailPreviewModal.leads.length === 1
+                          ? (emailPreviewModal.emailOverride ?? emailPreviewModal.leads[0].email ?? '')
+                          : `${emailPreviewModal.leads.length} destinatários selecionados`
+                      }
+                      onChange={emailPreviewModal.leads.length === 1
+                        ? e => setEmailPreviewModal({ ...emailPreviewModal, emailOverride: e.target.value })
+                        : undefined}
+                      className={`w-full bg-dark/60 border rounded-xl px-4 py-3 focus:outline-none transition-colors ${
+                        emailPreviewModal.leads.length === 1
+                          ? 'border-border-light text-white focus:border-primary'
+                          : 'border-border-light text-white/50 cursor-default'
+                      }`}
                     />
                   </div>
                   <div>
@@ -4634,8 +7245,29 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-2">Body do e-mail</label>
-                    <textarea 
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-slate-400">Body do e-mail</label>
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        {['{nome}', '{nicho}', '{url}', '{problema1}', '{cidade}'].map(v => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById('email-body-textarea');
+                              if (!el) return;
+                              const start = el.selectionStart ?? el.value.length;
+                              const current = emailPreviewModal.template.corpo;
+                              const newVal = current.slice(0, start) + v + current.slice(start);
+                              setEmailPreviewModal({ ...emailPreviewModal, template: { ...emailPreviewModal.template, corpo: newVal } });
+                              setTimeout(() => { el.focus(); el.setSelectionRange(start + v.length, start + v.length); }, 0);
+                            }}
+                            className="text-[10px] font-mono font-bold px-2 py-1 rounded-lg bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-all"
+                          >{v}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <textarea
+                      id="email-body-textarea"
                       rows={12}
                       value={resolveEmailText(emailPreviewModal.template.corpo, emailPreviewModal.leads[0])}
                       onChange={e => setEmailPreviewModal({ ...emailPreviewModal, template: { ...emailPreviewModal.template, corpo: e.target.value } })}

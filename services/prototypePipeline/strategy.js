@@ -41,9 +41,20 @@ function normalizeNicheInput(leadDesignData, leadContext) {
 function selectTemplateByRules(leadDesignData, leadContext, siteQuality) {
   const sample = normalizeNicheInput(leadDesignData, leadContext);
 
-  if (/advoc|jurid|direito/.test(sample)) return "institucional_premium";
-  if (/saas|software|plataforma|sistema|tecnolog/.test(sample)) return "saas_moderno";
-  if (/clinica|odont|restaurante|beleza|barbear|academia|pet|imobiliaria|servic/.test(sample)) {
+  // Nichos institucionais / alta credibilidade → premium
+  if (/advoc|jurid|direito|contab|audit|financ|segur|consult/.test(sample)) return "institucional_premium";
+
+  // SaaS / tecnologia → moderno
+  if (/saas|software|plataforma|sistema|tecnolog|startup|app\b|applic/.test(sample)) return "saas_moderno";
+
+  // Educação / cursos → landing orientada a conversão
+  if (/educa|curso|treinamento|escola|universid|ensino|capacit/.test(sample)) return "landing_conversao";
+
+  // Serviços locais de alto ticket → high_ticket
+  if (/imob|imovei|incorpora|arquitet|engenharia/.test(sample)) return "high_ticket";
+
+  // Serviços locais de conversão rápida → landing
+  if (/clinica|odont|dentist|medic|saude|psicolog|nutricion|estetica|beleza|barbear|academia|fitness|restaurante|pet|loja|varejo/.test(sample)) {
     return "landing_conversao";
   }
 

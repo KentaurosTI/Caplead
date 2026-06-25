@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const setupIpcHandlers = require('../services/ipcHandlers');
@@ -77,10 +77,27 @@ function createWindow() {
   });
 }
 
+async function checkFollowupsOnStart() {
+  try {
+    const crud = require('../services/crud');
+    const due = await crud.getFollowupsDue();
+    if (due.length > 0 && Notification.isSupported()) {
+      const n = new Notification({
+        title: 'CapLead — Follow-ups pendentes',
+        body: `Você tem ${due.length} lead(s) com follow-up para hoje ou atrasado. Abra o CapLead para ver.`,
+        silent: false
+      });
+      n.on('click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
+      n.show();
+    }
+  } catch (_) {}
+}
+
 app.whenReady().then(() => {
   registerManualHandler();
   createWindow();
   setupIpcHandlers(ipcMain, mainWindow);
+  setTimeout(checkFollowupsOnStart, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -93,4 +110,27 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  try {
+    const dbFile = 'database.sqlite';
+    const dbPath = app.isPackaged
+      ? path.join(app.getPath('userData'), dbFile)
+      : path.join(process.cwd(), dbFile);
+    if (!fs.existsSync(dbPath)) return;
+    const backupDir = path.join(
+      app.isPackaged ? app.getPath('userData') : process.cwd(),
+      'backups', 'auto'
+    );
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    fs.copyFileSync(dbPath, path.join(backupDir, `db-auto-${stamp}.sqlite`));
+    const all = fs.readdirSync(backupDir).filter(f => f.startsWith('db-auto-')).sort();
+    if (all.length > 7) {
+      all.slice(0, all.length - 7).forEach(f => {
+        try { fs.unlinkSync(path.join(backupDir, f)); } catch (_) {}
+      });
+    }
+  } catch (_) {}
 });

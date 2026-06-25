@@ -9,7 +9,8 @@ const emailService = require('./emailService');
 const linkedinScraper = require('./linkedinScraper');
 const kentaurosExport = require('./kentaurosExport');
 const leadsExcelExport = require('./leadsExcelExport');
-const { app, shell, dialog } = require('electron');
+const pdfDiagnosticReport = require('./pdfDiagnosticReport');
+const { app, shell, dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -62,10 +63,14 @@ function setupIpcHandlers(ipcMain, mainWindow) {
     }
   });
 
+  let _broadcastTimer = null;
   const broadcastUpdate = () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('db-update');
-    }
+    if (_broadcastTimer) clearTimeout(_broadcastTimer);
+    _broadcastTimer = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('db-update');
+      }
+    }, 80);
   };
 
   const handleIpc = (channel, crudMethod, isMutation = false) => {
@@ -93,7 +98,8 @@ function setupIpcHandlers(ipcMain, mainWindow) {
   // Ações de Busca (Scraping Real Local via IPC)
   ipcMain.handle('search-leads', async (event, params) => {
     try {
-      const info = await scraper.buscarLeads(params.nicho, params.regiao, params.onlyWithoutSite, {
+      const searchFn = (params.nicho || '').includes(',') ? scraper.buscarLeadsMulti : scraper.buscarLeads;
+      const info = await searchFn(params.nicho, params.regiao, params.onlyWithoutSite, {
         requireEmail: Boolean(params.requireEmail),
         requireWhatsapp: Boolean(params.requireWhatsapp),
         limit: params.limit
@@ -607,6 +613,371 @@ function setupIpcHandlers(ipcMain, mainWindow) {
       return await kentaurosExport.testKentaurosConnection(kentaurosUrl);
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // Task 2 — Cancelar captura em andamento
+  ipcMain.handle('cancel-search', async () => {
+    try {
+      scraper.cancelSearch();
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Task 3 — Dashboard estatísticas avançadas
+  handleIpc('get-dashboard-stats', crud.getDashboardStats);
+
+  // Task 6 — Follow-ups vencidos
+  handleIpc('get-followups-due', crud.getFollowupsDue);
+
+  // Task 7 — Gerar PDF de diagnóstico
+  ipcMain.handle('generate-diagnostic-pdf', async (event, { lead, problems, score, breakdown }) => {
+    try {
+      const result = await pdfDiagnosticReport.generateDiagnosticReport({ lead, problems, score, breakdown });
+      if (result.success && result.path) shell.showItemInFolder(result.path);
+      return result;
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Task 9 — Templates de mensagem por nicho
+  handleIpc('get-message-templates', crud.getMessageTemplates);
+  ipcMain.handle('save-message-template', async (event, data) => {
+    try {
+      const result = await crud.saveMessageTemplate(data);
+      return { success: true, data: result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+  ipcMain.handle('delete-message-template', async (event, id) => {
+    try {
+      await crud.deleteMessageTemplate(id);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Task 10 — Backup manual e export/import JSON
+  ipcMain.handle('backup-db-manual', async () => {
+    try {
+      const userDataDir = app.getPath('userData');
+      const dbPath = path.join(userDataDir, 'database.sqlite');
+      const fallbackDbPath = path.join(process.cwd(), 'database.sqlite');
+      const sourcePath = fs.existsSync(dbPath) ? dbPath : fallbackDbPath;
+      if (!fs.existsSync(sourcePath)) return { success: false, error: 'Banco de dados não encontrado.' };
+
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: 'Salvar backup do banco',
+        defaultPath: path.join(app.getPath('downloads'), `caplead-backup-${new Date().toISOString().slice(0,10)}.sqlite`),
+        filters: [{ name: 'SQLite Database', extensions: ['sqlite', 'db'] }]
+      });
+      if (canceled || !filePath) return { success: false, canceled: true };
+      fs.copyFileSync(sourcePath, filePath);
+      shell.showItemInFolder(filePath);
+      return { success: true, path: filePath };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('restore-db', async () => {
+    try {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: 'Selecionar backup para restaurar',
+        filters: [{ name: 'SQLite Database', extensions: ['sqlite', 'db'] }],
+        properties: ['openFile']
+      });
+      if (canceled || !filePaths[0]) return { success: false, canceled: true };
+
+      const userDataDir = app.getPath('userData');
+      const dbPath = path.join(userDataDir, 'database.sqlite');
+      const fallbackDbPath = path.join(process.cwd(), 'database.sqlite');
+      const targetPath = fs.existsSync(userDataDir) ? dbPath : fallbackDbPath;
+
+      // Faz backup do estado atual antes de restaurar
+      const safePath = targetPath.replace('.sqlite', `_pre_restore_${Date.now()}.sqlite`);
+      if (fs.existsSync(targetPath)) fs.copyFileSync(targetPath, safePath);
+
+      fs.copyFileSync(filePaths[0], targetPath);
+      broadcastUpdate();
+      return { success: true, message: 'Banco restaurado. Reinicie o aplicativo para carregar os dados.' };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('export-leads-json', async () => {
+    try {
+      const data = await crud.exportLeadsJson();
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: 'Exportar leads em JSON',
+        defaultPath: path.join(app.getPath('downloads'), `caplead-leads-${new Date().toISOString().slice(0,10)}.json`),
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      });
+      if (canceled || !filePath) return { success: false, canceled: true };
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+      shell.showItemInFolder(filePath);
+      return { success: true, path: filePath, count: data.sites.length };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('import-leads-json', async () => {
+    try {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: 'Importar leads de JSON',
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+        properties: ['openFile']
+      });
+      if (canceled || !filePaths[0]) return { success: false, canceled: true };
+      const raw = fs.readFileSync(filePaths[0], 'utf8');
+      const data = JSON.parse(raw);
+      const result = await crud.importLeadsJson(data);
+      broadcastUpdate();
+      return { success: true, ...result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // T07 — Histórico de e-mails
+  handleIpc('get-email-history', crud.getEmailHistory);
+  handleIpc('add-email-history', crud.addEmailHistory, true);
+
+  // T13 — Score override
+  handleIpc('save-score-override', crud.saveScoreOverride, true);
+
+  // T14 — Ticket value
+  handleIpc('save-ticket-value', crud.saveTicketValue, true);
+
+  // T26 — Export CSV
+  ipcMain.handle('export-leads-csv', async (event, { rows, filename }) => {
+    try {
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: 'Exportar CSV',
+        defaultPath: filename || 'leads.csv',
+        filters: [{ name: 'CSV', extensions: ['csv'] }]
+      });
+      if (canceled || !filePath) return { success: false, error: 'cancelled' };
+      if (!rows || rows.length === 0) return { success: false, error: 'sem dados' };
+      const keys = Object.keys(rows[0]);
+      const escape = (v) => {
+        const s = String(v === null || v === undefined ? '' : v);
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const csv = [keys.join(','), ...rows.map(r => keys.map(k => escape(r[k])).join(','))].join('\n');
+      fs.writeFileSync(filePath, '﻿' + csv, 'utf8');
+      return { success: true, path: filePath };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // T27 — Activity log
+  handleIpc('log-activity', crud.logActivity, true);
+  handleIpc('get-activity-log', crud.getActivityLog);
+
+  // T30 — App health
+  ipcMain.handle('get-app-health', async () => {
+    try {
+      const dbFile = app.isPackaged
+        ? path.join(app.getPath('userData'), 'database.sqlite')
+        : path.join(process.cwd(), 'database.sqlite');
+      const dbSize = fs.existsSync(dbFile) ? Math.round(fs.statSync(dbFile).size / 1024) : 0;
+      const backupDir = path.join(
+        app.isPackaged ? app.getPath('userData') : process.cwd(),
+        'backups', 'auto'
+      );
+      const lastBackup = fs.existsSync(backupDir)
+        ? fs.readdirSync(backupDir).filter(f => f.endsWith('.sqlite')).sort().pop() || null
+        : null;
+      const mem = process.memoryUsage();
+      return {
+        success: true,
+        version: app.getVersion(),
+        dbSizeKb: dbSize,
+        heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
+        lastBackup: lastBackup ? lastBackup.replace('db-auto-', '').replace('.sqlite', '') : null,
+        platform: process.platform,
+        uptime: Math.round(process.uptime())
+      };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // T21 — Busca global em todos os leads
+  ipcMain.handle('search-all-leads', async (event, query) => {
+    try {
+      const q = String(query || '').toLowerCase().trim();
+      if (!q) return { success: true, results: [] };
+      const [sites, sistemas, linkedin] = await Promise.all([
+        crud.getLeadSites(),
+        crud.getLeadSistemas(),
+        crud.getAllLeadLinkedin()
+      ]);
+      const match = (lead) => {
+        const str = [lead.nome, lead.titulo, lead.url, lead.site_oficial, lead.nicho, lead.categoria, lead.localizacao, lead.email, lead.telefone, lead.empresa].join(' ').toLowerCase();
+        return str.includes(q);
+      };
+      const results = [
+        ...sites.filter(match).slice(0, 10).map(l => ({ ...l, _typeCode: 'sites' })),
+        ...sistemas.filter(match).slice(0, 10).map(l => ({ ...l, _typeCode: 'sistema' })),
+        ...linkedin.filter(match).slice(0, 10).map(l => ({ ...l, _typeCode: 'linkedin' }))
+      ].slice(0, 20);
+      return { success: true, results };
+    } catch (e) {
+      return { success: false, error: e.message, results: [] };
+    }
+  });
+
+  // ─── WhatsApp AutoPilot ────────────────────────────────────────────────────
+  let wppPilotWindow = null;
+
+  function getWppWindow() {
+    return wppPilotWindow && !wppPilotWindow.isDestroyed() ? wppPilotWindow : null;
+  }
+
+  ipcMain.handle('wpp:pilot-init', async () => {
+    try {
+      if (!getWppWindow()) {
+        wppPilotWindow = new BrowserWindow({
+          width: 1100,
+          height: 780,
+          title: 'CapLead — WhatsApp Automático',
+          parent: mainWindow,
+          webPreferences: {
+            partition: 'persist:wpp-autopilot',
+            nodeIntegration: false,
+            contextIsolation: true,
+          },
+          icon: path.join(__dirname, '../assets/icon.png'),
+        });
+        wppPilotWindow.on('closed', () => { wppPilotWindow = null; });
+      }
+      wppPilotWindow.show();
+      await wppPilotWindow.loadURL('https://web.whatsapp.com');
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('wpp:pilot-check', async () => {
+    try {
+      const win = getWppWindow();
+      if (!win) return { success: false, error: 'Janela não inicializada' };
+      const status = await win.webContents.executeJavaScript(`(() => {
+        const hasQr = !!document.querySelector('[data-testid="qrcode"]') ||
+                      !!(Array.from(document.querySelectorAll('canvas')).find(c => c.getAttribute('aria-label')));
+        const hasApp = !!document.querySelector('[data-testid="chat-list"]') ||
+                       !!document.querySelector('#side') ||
+                       !!document.querySelector('[data-testid="cell-frame-container"]');
+        return { needsQR: hasQr, loggedIn: hasApp };
+      })()`);
+      return { success: true, ...status };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('wpp:pilot-send', async (event, { phone, message }) => {
+    try {
+      const win = getWppWindow();
+      if (!win) return { success: false, error: 'Janela WhatsApp não inicializada' };
+
+      const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(message)}`;
+      await win.loadURL(url);
+
+      const result = await win.webContents.executeJavaScript(`
+        new Promise((resolve) => {
+          const TIMEOUT = 30000;
+          const start = Date.now();
+          const tick = setInterval(() => {
+            // QR code — sessão expirou
+            if (document.querySelector('[data-testid="qrcode"]') ||
+                Array.from(document.querySelectorAll('canvas')).some(c => c.getAttribute('aria-label'))) {
+              clearInterval(tick);
+              return resolve({ status: 'qr-needed' });
+            }
+            // Número inválido
+            const popup = document.querySelector('[data-testid="popup-contents"]');
+            if (popup && /inválido|invalid|not found/i.test(popup.textContent)) {
+              clearInterval(tick);
+              return resolve({ status: 'invalid-phone' });
+            }
+            // Botão enviar
+            const btn = document.querySelector('[data-testid="send"]') ||
+                        document.querySelector('span[data-icon="send"]') ||
+                        document.querySelector('[data-testid="compose-btn-send"]') ||
+                        document.querySelector('button[aria-label="Send"]') ||
+                        document.querySelector('button[aria-label="Enviar"]');
+            if (btn) {
+              btn.click();
+              clearInterval(tick);
+              return resolve({ status: 'sent' });
+            }
+            if (Date.now() - start > TIMEOUT) {
+              clearInterval(tick);
+              return resolve({ status: 'timeout' });
+            }
+          }, 700);
+        })
+      `, true);
+
+      return { success: true, ...result };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('wpp:pilot-stop', async () => {
+    try {
+      const win = getWppWindow();
+      if (win) { win.close(); wppPilotWindow = null; }
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // T18 — PageSpeed API check
+  ipcMain.handle('pagespeed-check', async (event, url) => {
+    try {
+      const apiKey = await crud.getConfig('pagespeed_api_key');
+      const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile${apiKey ? '&key=' + apiKey : ''}`;
+      const data = await new Promise((resolve, reject) => {
+        const mod = apiUrl.startsWith('https') ? https : http;
+        mod.get(apiUrl, (res) => {
+          let body = '';
+          res.on('data', d => body += d);
+          res.on('end', () => {
+            try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+          });
+        }).on('error', reject);
+      });
+      const cats = data.lighthouseResult?.categories;
+      const audits = data.lighthouseResult?.audits;
+      if (!cats) return { success: false, error: 'Sem dados' };
+      return {
+        success: true,
+        performance: Math.round((cats.performance?.score || 0) * 100),
+        seo: Math.round((cats.seo?.score || 0) * 100),
+        accessibility: Math.round((cats.accessibility?.score || 0) * 100),
+        bestPractices: Math.round((cats['best-practices']?.score || 0) * 100),
+        lcp: audits?.['largest-contentful-paint']?.displayValue,
+        cls: audits?.['cumulative-layout-shift']?.displayValue,
+        fcp: audits?.['first-contentful-paint']?.displayValue,
+      };
+    } catch (e) {
+      return { success: false, error: e.message };
     }
   });
 }

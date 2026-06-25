@@ -104,4 +104,59 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('kentauros-export-progress', listener);
   },
   testKentaurosConnection: (url) => safeInvoke('test-kentauros-connection', url),
+
+  // Task 2 — Cancelar captura
+  cancelSearch: () => safeInvoke('cancel-search'),
+
+  // Task 3 — Dashboard stats
+  getDashboardStats: () => safeInvoke('get-dashboard-stats'),
+
+  // Task 6 — Follow-ups vencidos
+  getFollowupsDue: () => safeInvoke('get-followups-due'),
+
+  // Task 7 — PDF de diagnóstico
+  generateDiagnosticPdf: (data) => safeInvoke('generate-diagnostic-pdf', data),
+
+  // Task 9 — Templates de mensagem
+  getMessageTemplates: () => safeInvoke('get-message-templates'),
+  saveMessageTemplate: (data) => safeInvoke('save-message-template', data),
+  deleteMessageTemplate: (id) => safeInvoke('delete-message-template', id),
+
+  // Task 10 — Backup/Restore/Export
+  backupDbManual: () => safeInvoke('backup-db-manual'),
+  restoreDb: () => safeInvoke('restore-db'),
+  exportLeadsJson: () => safeInvoke('export-leads-json'),
+  importLeadsJson: () => safeInvoke('import-leads-json'),
+
+  // T07 — Histórico de e-mails por lead
+  getEmailHistory: (leadId, leadTipo) => safeInvoke('get-email-history', leadId, leadTipo),
+  addEmailHistory: (leadId, leadTipo, to, subject, preview) => safeInvoke('add-email-history', leadId, leadTipo, to, subject, preview),
+
+  // T13 — Score override manual
+  saveScoreOverride: (table, id, value) => safeInvoke('save-score-override', table, id, value),
+
+  // T14 — Valor estimado do contrato
+  saveTicketValue: (table, id, value) => safeInvoke('save-ticket-value', table, id, value),
+
+  // T26 — Export CSV
+  exportLeadsCsv: (rows, filename) => safeInvoke('export-leads-csv', { rows, filename }),
+
+  // T27 — Log de atividades
+  logActivity: (tipo, detalhe, extra) => safeInvoke('log-activity', tipo, detalhe, extra),
+  getActivityLog: (limit) => safeInvoke('get-activity-log', limit),
+
+  // T30 — Saúde do app
+  getAppHealth: () => safeInvoke('get-app-health'),
+
+  // T21 — Busca global
+  searchAllLeads: (query) => safeInvoke('search-all-leads', query),
+
+  // T18 — PageSpeed API
+  pagespeedCheck: (url) => safeInvoke('pagespeed-check', url),
+
+  // WhatsApp AutoPilot
+  wppPilotInit: () => safeInvoke('wpp:pilot-init'),
+  wppPilotCheck: () => safeInvoke('wpp:pilot-check'),
+  wppPilotSend: (phone, message) => safeInvoke('wpp:pilot-send', { phone, message }),
+  wppPilotStop: () => safeInvoke('wpp:pilot-stop'),
 });
