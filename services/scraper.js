@@ -2,6 +2,11 @@ const puppeteer = require('puppeteer');
 const crud = require('./crud');
 const { getBrowserPath } = require('./browserPath');
 
+// Cancellation flag — set via cancelSearch(), checked inside buscarLeads loop
+let _cancelFlag = false;
+function cancelSearch() { _cancelFlag = true; }
+function resetCancelFlag() { _cancelFlag = false; }
+
 // ============================================================
 // MAPA NICHO → TEMA → BUSCAS + FILTROS
 //
@@ -193,6 +198,7 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
     onProgress = captureOptions;
     captureOptions = {};
   }
+  resetCancelFlag();
   const emitProgress = (payload) => {
     if (typeof onProgress === 'function') {
       try { onProgress(payload); } catch (_) {}
@@ -239,7 +245,14 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
     let inspectedCount = 0;
     let consecutiveSaveFailures = 0;
     const processedLeads = [];
+
+    // Pre-load keys already in DB to avoid duplicates across executions (Task 1)
     const existingUrlsInBatch = new Set();
+    try {
+      const dbKeys = await crud.getExistingLeadKeys();
+      dbKeys.forEach(k => existingUrlsInBatch.add(k));
+    } catch (_) {}
+
     const searchTerms = nichoInfo.buscas?.length ? nichoInfo.buscas : [nicho];
     const queries = [...new Set(searchTerms.map(term => regiao ? `${term} em ${regiao}` : term))];
     const targetNewLeads = Math.min(50, Math.max(1, Number(captureOptions.limit || 20) || 20));
@@ -251,9 +264,10 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
           ? 'whatsapp'
           : 'all';
     const contactFilterLabel = getContactFilterLabel(contactFilterMode);
-    const candidateMultiplier = contactFilterMode === 'all' ? 5 : contactFilterMode === 'both' ? 16 : 12;
-    const maxPlacesPerQuery = Math.min(700, Math.max(120, targetNewLeads * candidateMultiplier));
-    const maxScrollsPerQuery = Math.min(70, Math.max(24, Math.ceil(maxPlacesPerQuery / 8)));
+    const candidateMultiplier = contactFilterMode === 'all' ? 4 : contactFilterMode === 'both' ? 10 : 8;
+    const minPlacesPerQuery = contactFilterMode === 'all' ? 40 : contactFilterMode === 'both' ? 80 : 60;
+    const maxPlacesPerQuery = Math.min(320, Math.max(minPlacesPerQuery, targetNewLeads * candidateMultiplier));
+    const maxScrollsPerQuery = Math.min(32, Math.max(8, Math.ceil(maxPlacesPerQuery / 10)));
 
     emitProgress({ phase: 'searching', percent: 5, message: `Buscando oportunidades em ${regiao || 'todo o Brasil'}...`, currentLead: '' });
 
@@ -283,10 +297,14 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
       console.log(`\n[Scraper] Total bruto extra?do em "${query}": ${allLeads.length}`);
 
       for (const lead of allLeads) {
+        if (_cancelFlag) {
+          emitProgress({ phase: 'cancelled', percent: 100, message: `Captura cancelada. ${savedCount} leads salvos.`, currentLead: '', savedCount, targetNewLeads });
+          break;
+        }
         inspectedCount++;
         const finalUrl = lead.site_oficial ? cleanUrl(lead.site_oficial) : lead.maps_url;
         const batchKey = finalUrl || lead.maps_url || `${lead.titulo}|${lead.localizacao}`;
-        if (!finalUrl || existingUrlsInBatch.has(batchKey)) continue;
+        if (!finalUrl || existingUrlsInBatch.has(batchKey)) { duplicateCount++; continue; }
 
         emitProgress({
           phase: 'saving',
@@ -328,14 +346,18 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
               targetNewLeads
             });
 
-            candidateContacts = await extractCandidateContacts(browser, lead, finalUrl);
-            const hasEmail = candidateContacts.emails.length > 0;
-            const hasWhatsapp = candidateContacts.whatsappPhones.length > 0 || isBrazilWhatsappPhone(lead.telefone);
+            candidateContacts = contactFilterMode === 'whatsapp' && isBrazilWhatsappPhone(lead.telefone)
+              ? extractBaseLeadContacts(lead)
+              : await extractCandidateContacts(browser, lead, finalUrl);
+            const contactSelection = resolveLeadContactSelection(lead, candidateContacts);
+            const hasEmail = contactSelection.hasEmail;
+            const hasWhatsapp = contactSelection.hasWhatsapp;
             if (contactFilterMode === 'both' && (!hasEmail || !hasWhatsapp)) continue;
             if (contactFilterMode === 'email' && !hasEmail) continue;
             if (contactFilterMode === 'whatsapp' && !hasWhatsapp) continue;
           }
 
+          const contactSelection = resolveLeadContactSelection(lead, candidateContacts);
           const resolvedCategory = inferLeadCategory({ ...lead, url: finalUrl }, nichoInfo.tema);
           const savedLead = await crud.createLeadSite({
             url: finalUrl,
@@ -343,7 +365,7 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
             descricao: resolvedCategory + (lead.localizacao ? ` - ${lead.localizacao}` : ''),
             score_design: 0,
             data_ultima_atualizacao: new Date().toISOString(),
-            telefone: lead.telefone,
+            telefone: contactSelection.primaryPhone,
             categoria: resolvedCategory,
             localizacao: lead.localizacao,
             maps_url: lead.maps_url,
@@ -358,16 +380,13 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
             continue;
           }
 
-          const contactPhones = [...new Set([
-            ...(candidateContacts.phones || []),
-            ...(candidateContacts.whatsappPhones || [])
-          ])];
+          const contactPhones = contactSelection.contactPhones;
           processedLeads.push({
             ...lead,
             id: savedLead.id,
             url: finalUrl,
             categoria: resolvedCategory,
-            telefone: lead.telefone || contactPhones[0] || ''
+            telefone: contactSelection.primaryPhone
           });
           if (candidateContacts.emails?.length || contactPhones.length) {
             const maxContacts = Math.max(candidateContacts.emails.length, contactPhones.length);
@@ -402,8 +421,10 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
       targetNewLeads
     });
 
-    console.log(`[Scraper] Busca finalizada. Salvos: ${savedCount}. Repetidos ignorados: ${duplicateCount}. Inspecionados: ${inspectedCount}`);
-    return { success: true, count: savedCount, target: targetNewLeads, contactFilterMode, duplicates: duplicateCount, inspected: inspectedCount, capturados: processedLeads };
+    const wasCancelled = _cancelFlag;
+    resetCancelFlag();
+    console.log(`[Scraper] Busca finalizada. Salvos: ${savedCount}. Repetidos ignorados: ${duplicateCount}. Inspecionados: ${inspectedCount}. Cancelado: ${wasCancelled}`);
+    return { success: true, count: savedCount, target: targetNewLeads, contactFilterMode, duplicates: duplicateCount, inspected: inspectedCount, capturados: processedLeads, cancelled: wasCancelled };
 
   } catch (error) {
     console.error('[Scraper] Erro cr?tico:', error);
@@ -424,12 +445,12 @@ async function scrapeGoogleMaps(page, query, coords, options = {}) {
   }
   
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 5000));
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 24000 });
+    await new Promise(r => setTimeout(r, 3000));
 
     const collectedLinks = new Set();
     let stableScrolls = 0;
-    for (let i = 0; i < maxScrolls && collectedLinks.size < maxPlaces && stableScrolls < 4; i++) {
+    for (let i = 0; i < maxScrolls && collectedLinks.size < maxPlaces && stableScrolls < 3; i++) {
       const before = collectedLinks.size;
       const links = await page.evaluate(() => {
         return Array.from(document.querySelectorAll('a[href^="https://www.google.com/maps/place/"]')).map(a => a.href);
@@ -448,7 +469,7 @@ async function scrapeGoogleMaps(page, query, coords, options = {}) {
         if (feed) feed.scrollBy(0, Math.max(feed.clientHeight * 1.8, 1800));
         else window.scrollBy(0, 1800);
       });
-      await new Promise(r => setTimeout(r, 1400));
+      await new Promise(r => setTimeout(r, 900));
     }
 
     const placeLinks = [...collectedLinks].slice(0, maxPlaces);
@@ -456,15 +477,15 @@ async function scrapeGoogleMaps(page, query, coords, options = {}) {
 
     for (let index = 0; index < placeLinks.length; index++) {
       const link = placeLinks[index];
-      let maxRetries = 3;
+      let maxRetries = 2;
       let attempt = 0;
       let success = false;
       
       while (attempt < maxRetries && !success) {
         try {
           attempt++;
-          await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 15000 + (attempt * 5000) });
-          await new Promise(r => setTimeout(r, 1800 * attempt));
+          await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 12000 + (attempt * 3000) });
+          await new Promise(r => setTimeout(r, 900 * attempt));
           
           const placeData = await page.evaluate((mapsUrl) => {
             const getText = (selector) => {
@@ -521,6 +542,27 @@ function isBrazilWhatsappPhone(value = '') {
   return /^\d{2}9\d{8}$/.test(normalizePhoneDigits(value));
 }
 
+function resolveLeadContactSelection(lead = {}, candidateContacts = {}) {
+  const leadPhone = normalizePhoneDigits(lead.telefone);
+  const whatsappPhones = [...new Set([
+    ...(candidateContacts.whatsappPhones || []).map(normalizePhoneDigits),
+    ...(isBrazilWhatsappPhone(leadPhone) ? [leadPhone] : [])
+  ].filter(Boolean))];
+  const otherPhones = [
+    ...(candidateContacts.phones || []).map(normalizePhoneDigits),
+    leadPhone
+  ].filter(phone => phone.length >= 10 && phone.length <= 11);
+  const contactPhones = [...new Set([...whatsappPhones, ...otherPhones])];
+
+  return {
+    hasEmail: (candidateContacts.emails || []).length > 0,
+    hasWhatsapp: whatsappPhones.length > 0,
+    whatsappPhone: whatsappPhones[0] || '',
+    primaryPhone: whatsappPhones[0] || leadPhone || otherPhones[0] || '',
+    contactPhones
+  };
+}
+
 function extractContactsFromText(text = '') {
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi;
   const phoneRegex = /(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\d{4}[-\s]?\d{4}|\d{4}[-\s]?\d{4})/g;
@@ -548,15 +590,15 @@ function extractContactsFromText(text = '') {
 }
 
 async function extractCandidateContacts(browser, lead, finalUrl) {
-  const baseContacts = extractContactsFromText([lead.telefone, lead.site_oficial, lead.maps_url].filter(Boolean).join('\n'));
+  const baseContacts = extractBaseLeadContacts(lead);
   if (!lead.site_oficial || !finalUrl || isGoogleMapsUrl(finalUrl)) return baseContacts;
 
   const page = await browser.newPage();
   try {
     await page.setViewport({ width: 1280, height: 720 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-    await page.goto(finalUrl.startsWith('http') ? finalUrl : `https://${finalUrl}`, { waitUntil: 'domcontentloaded', timeout: 18000 });
-    await new Promise(r => setTimeout(r, 1200));
+    await page.goto(finalUrl.startsWith('http') ? finalUrl : `https://${finalUrl}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
+    await new Promise(r => setTimeout(r, 700));
     const signal = await page.evaluate(() => {
       const visibleText = document.body ? document.body.innerText : '';
       const html = document.body ? document.body.innerHTML : '';
@@ -584,6 +626,10 @@ async function extractCandidateContacts(browser, lead, finalUrl) {
   } finally {
     await page.close().catch(() => {});
   }
+}
+
+function extractBaseLeadContacts(lead = {}) {
+  return extractContactsFromText([lead.telefone, lead.site_oficial, lead.maps_url].filter(Boolean).join('\n'));
 }
 
 function cleanUrl(rawUrl) {
@@ -656,11 +702,137 @@ function getRegionCoords(regiao) {
     'SE': { latitude: -10.911, longitude: -37.071 }, 'SERGIPE': { latitude: -10.911, longitude: -37.071 },
     'TO': { latitude: -10.167, longitude: -48.327 }, 'TOCANTINS': { latitude: -10.167, longitude: -48.327 }
   };
+  const cityMap = {
+    // Capitais e grandes cidades
+    'SALVADOR': { latitude: -12.971, longitude: -38.510 },
+    'FORTALEZA': { latitude: -3.717, longitude: -38.543 },
+    'RECIFE': { latitude: -8.054, longitude: -34.881 },
+    'BELEM': { latitude: -1.455, longitude: -48.490 }, 'BELÉM': { latitude: -1.455, longitude: -48.490 },
+    'MANAUS': { latitude: -3.118, longitude: -60.021 },
+    'CURITIBA': { latitude: -25.429, longitude: -49.267 },
+    'PORTO ALEGRE': { latitude: -30.034, longitude: -51.217 },
+    'FLORIANOPOLIS': { latitude: -27.594, longitude: -48.542 }, 'FLORIANÓPOLIS': { latitude: -27.594, longitude: -48.542 },
+    'BELO HORIZONTE': { latitude: -19.921, longitude: -43.937 },
+    'SAO PAULO': { latitude: -23.550, longitude: -46.633 }, 'SÃO PAULO': { latitude: -23.550, longitude: -46.633 },
+    'RIO DE JANEIRO': { latitude: -22.906, longitude: -43.172 },
+    'BRASILIA': { latitude: -15.779, longitude: -47.929 }, 'BRASÍLIA': { latitude: -15.779, longitude: -47.929 },
+    'GOIANIA': { latitude: -16.686, longitude: -49.264 }, 'GOIÂNIA': { latitude: -16.686, longitude: -49.264 },
+    'CAMPO GRANDE': { latitude: -20.442, longitude: -54.646 },
+    'CUIABA': { latitude: -15.601, longitude: -56.097 }, 'CUIABÁ': { latitude: -15.601, longitude: -56.097 },
+    'MACAPA': { latitude: 0.034, longitude: -51.066 }, 'MACAPÁ': { latitude: 0.034, longitude: -51.066 },
+    'RIO BRANCO': { latitude: -9.974, longitude: -67.807 },
+    'PORTO VELHO': { latitude: -8.761, longitude: -63.903 },
+    'BOA VISTA': { latitude: 2.823, longitude: -60.675 },
+    'MACEIO': { latitude: -9.665, longitude: -35.735 }, 'MACEIÓ': { latitude: -9.665, longitude: -35.735 },
+    'JOAO PESSOA': { latitude: -7.115, longitude: -34.863 }, 'JOÃO PESSOA': { latitude: -7.115, longitude: -34.863 },
+    'NATAL': { latitude: -5.795, longitude: -35.209 },
+    'TERESINA': { latitude: -5.091, longitude: -42.803 },
+    'SAO LUIS': { latitude: -2.530, longitude: -44.302 }, 'SÃO LUÍS': { latitude: -2.530, longitude: -44.302 },
+    'VITORIA': { latitude: -20.315, longitude: -40.312 }, 'VITÓRIA': { latitude: -20.315, longitude: -40.312 },
+    'ARACAJU': { latitude: -10.911, longitude: -37.071 },
+    'PALMAS': { latitude: -10.167, longitude: -48.327 },
+    // Cidades grandes não-capitais
+    'CAMPINAS': { latitude: -22.905, longitude: -47.062 },
+    'SANTOS': { latitude: -23.960, longitude: -46.333 },
+    'RIBEIRAO PRETO': { latitude: -21.177, longitude: -47.810 }, 'RIBEIRÃO PRETO': { latitude: -21.177, longitude: -47.810 },
+    'SAO JOSE DOS CAMPOS': { latitude: -23.178, longitude: -45.885 }, 'SÃO JOSÉ DOS CAMPOS': { latitude: -23.178, longitude: -45.885 },
+    'SOROCABA': { latitude: -23.502, longitude: -47.458 },
+    'OSASCO': { latitude: -23.533, longitude: -46.791 },
+    'UBERLANDIA': { latitude: -18.918, longitude: -48.276 }, 'UBERLÂNDIA': { latitude: -18.918, longitude: -48.276 },
+    'FEIRA DE SANTANA': { latitude: -12.255, longitude: -38.967 },
+    'VITORIA DA CONQUISTA': { latitude: -14.863, longitude: -40.844 }, 'VITÓRIA DA CONQUISTA': { latitude: -14.863, longitude: -40.844 },
+    'CARUARU': { latitude: -8.283, longitude: -35.976 },
+    'PETROLINA': { latitude: -9.397, longitude: -40.501 },
+    'JOINVILLE': { latitude: -26.303, longitude: -48.846 },
+    'BLUMENAU': { latitude: -26.919, longitude: -49.066 },
+    'LONDRINA': { latitude: -23.304, longitude: -51.169 },
+    'MARINGA': { latitude: -23.425, longitude: -51.938 }, 'MARINGÁ': { latitude: -23.425, longitude: -51.938 },
+    'CASCAVEL': { latitude: -24.958, longitude: -53.459 },
+    'CAXIAS DO SUL': { latitude: -29.168, longitude: -51.179 },
+    'PELOTAS': { latitude: -31.771, longitude: -52.342 },
+    'JUIZ DE FORA': { latitude: -21.760, longitude: -43.350 },
+    'CONTAGEM': { latitude: -19.931, longitude: -44.053 },
+    'BETIM': { latitude: -19.967, longitude: -44.197 },
+    'MONTES CLAROS': { latitude: -16.726, longitude: -43.862 },
+    'ANAPOLIS': { latitude: -16.326, longitude: -48.953 }, 'ANÁPOLIS': { latitude: -16.326, longitude: -48.953 },
+    'APARECIDA DE GOIANIA': { latitude: -16.823, longitude: -49.244 }, 'APARECIDA DE GOIÂNIA': { latitude: -16.823, longitude: -49.244 },
+    'IMPERATRIZ': { latitude: -5.526, longitude: -47.491 },
+    'SANTAREM': { latitude: -2.444, longitude: -54.708 }, 'SANTARÉM': { latitude: -2.444, longitude: -54.708 },
+    'CARAPICUIBA': { latitude: -23.522, longitude: -46.835 }, 'CARAPICUÍBA': { latitude: -23.522, longitude: -46.835 },
+    'GUARULHOS': { latitude: -23.463, longitude: -46.533 },
+    'SAO BERNARDO DO CAMPO': { latitude: -23.692, longitude: -46.565 }, 'SÃO BERNARDO DO CAMPO': { latitude: -23.692, longitude: -46.565 },
+    'SANTO ANDRE': { latitude: -23.664, longitude: -46.535 }, 'SANTO ANDRÉ': { latitude: -23.664, longitude: -46.535 },
+    'MOGI DAS CRUZES': { latitude: -23.524, longitude: -46.185 },
+    'DIADEMA': { latitude: -23.685, longitude: -46.621 },
+    'NITEROI': { latitude: -22.883, longitude: -43.104 }, 'NITERÓI': { latitude: -22.883, longitude: -43.104 },
+    'DUQUE DE CAXIAS': { latitude: -22.789, longitude: -43.311 },
+    'NOVA IGUACU': { latitude: -22.758, longitude: -43.452 }, 'NOVA IGUAÇU': { latitude: -22.758, longitude: -43.452 },
+    'SAO GONCALO': { latitude: -22.827, longitude: -43.053 }, 'SÃO GONÇALO': { latitude: -22.827, longitude: -43.053 },
+  };
+
   const normalized = regiao.toUpperCase().trim();
-  return stateMap[normalized] || null;
+  return stateMap[normalized] || cityMap[normalized] || null;
+}
+
+// T02 — Múltiplos nichos: aceita string "a, b, c" e roda sequencialmente
+async function buscarLeadsMulti(nichoStr, regiao, onlyWithoutSite, captureOptions, onProgress) {
+  const nichos = String(nichoStr || '').split(',').map(n => n.trim()).filter(Boolean);
+  if (nichos.length <= 1) return buscarLeads(nichoStr, regiao, onlyWithoutSite, captureOptions, onProgress);
+  const limit = captureOptions?.limit || 20;
+  const perNicho = Math.max(1, Math.round(limit / nichos.length));
+  let totalSaved = 0;
+  let lastResult = null;
+  for (let i = 0; i < nichos.length; i++) {
+    if (_cancelFlag) break;
+    const opts = { ...captureOptions, limit: perNicho };
+    const wrapProgress = (p) => {
+      if (typeof onProgress === 'function') {
+        onProgress({ ...p, message: `[${i + 1}/${nichos.length}] ${nichos[i]}: ${p.message || ''}` });
+      }
+    };
+    lastResult = await buscarLeads(nichos[i], regiao, onlyWithoutSite, opts, wrapProgress);
+    totalSaved += lastResult?.count || 0;
+  }
+  return { ...(lastResult || {}), count: totalSaved, multiNicho: true };
+}
+
+// T04 — Inferir nicho pelo nome/categoria retornado do Google Maps
+function inferNichoFromCategory(categoryStr) {
+  const s = String(categoryStr || '').toLowerCase();
+  const map = [
+    [['dental', 'odont', 'dent'], 'odontologia'],
+    [['clínica', 'clinica', 'médico', 'medico', 'hospital', 'saúde', 'saude'], 'saúde'],
+    [['psico', 'tera'], 'psicologia'],
+    [['fisio', 'reabilit'], 'fisioterapia'],
+    [['nutri'], 'nutrição'],
+    [['advog', 'juridico', 'jurídico', 'direito', 'advocaci'], 'advocacia'],
+    [['contab', 'contábil', 'contador', 'fiscal'], 'contabilidade'],
+    [['imóv', 'imov', 'imobili', 'corretor'], 'imóveis'],
+    [['academia', 'ginástica', 'fitness', 'personal'], 'academia'],
+    [['salão', 'salon', 'beleza', 'estética', 'estetica', 'cabeleir'], 'beleza'],
+    [['restaurante', 'pizzar', 'lanchon', 'hambúrg', 'hamburgu'], 'alimentação'],
+    [['escola', 'colégio', 'colegio', 'curso', 'educaç', 'educac'], 'educação'],
+    [['hotel', 'pousada', 'hospedagem'], 'hospedagem'],
+    [['mecânic', 'mecanic', 'auto', 'veículo', 'veiculo'], 'automotivo'],
+    [['pet', 'animal', 'veterin'], 'veterinária'],
+    [['farmácia', 'farmacia', 'droga'], 'farmácia'],
+    [['advocaci', 'notarial', 'cartório', 'cartorio'], 'juridico'],
+  ];
+  for (const [keywords, nicho] of map) {
+    if (keywords.some(k => s.includes(k))) return nicho;
+  }
+  return null;
 }
 
 module.exports = {
   buscarLeads,
-  getNichoInfo // exportado para uso em testes
+  buscarLeadsMulti,
+  cancelSearch,
+  getNichoInfo,
+  inferNichoFromCategory,
+  __testing: {
+    extractContactsFromText,
+    resolveLeadContactSelection,
+    isBrazilWhatsappPhone
+  }
 };

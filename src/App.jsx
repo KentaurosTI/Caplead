@@ -525,7 +525,8 @@ export default function App() {
 
   const getLeadName = (lead) => lead?.nome || lead?.titulo || lead?.empresa || 'Responsável';
 
-  const getLeadUrl = (lead) => lead?.url || lead?.site_oficial || lead?.developer_site || lead?.app_store_url || '';
+  const isMapsUrl = (url = '') => /google\.com\/(maps|search)/i.test(String(url));
+  const getLeadUrl = (lead) => lead?.site_oficial || lead?.developer_site || lead?.app_store_url || (!isMapsUrl(lead?.url) ? lead?.url : '') || '';
 
   const normalizeSearchText = (value = '') =>
     String(value || '')
@@ -3939,7 +3940,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   </select>
                   <select
                     className="bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40"
-                    value={templateForm.has_site === null ? '' : String(templateForm.has_site)}
+                    value={templateForm.has_site === null ? '' : templateForm.has_site ? '1' : '0'}
                     onChange={e => setTemplateForm(p => ({ ...p, has_site: e.target.value === '' ? null : e.target.value === '1' }))}
                   >
                     <option value="">Qualquer (com ou sem site)</option>
@@ -4497,7 +4498,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     
     if (gridFilters.source !== 'todos') {
       const isPlayStoreOnly = lead.tipo_origem === 'play_store' && !lead.developer_site;
-      const hasSite = !!(lead.url || lead.site_oficial || lead.developer_site) && !isPlayStoreOnly;
+      const hasSite = !!(lead.site_oficial || lead.developer_site || (!isMapsUrl(lead.url) && lead.url)) && !isPlayStoreOnly;
       if (gridFilters.source === 'com_site' && !hasSite) return false;
       if (gridFilters.source === 'sem_site' && hasSite) return false;
     }
@@ -5483,7 +5484,12 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                           </span>
                         )}
                       </div>
-                      {lead.url && <a href={lead.url.startsWith('http') ? lead.url : `https://${lead.url}`} target="_blank" rel="noreferrer" className="text-primary hover:underline text-[10px] flex items-center gap-1 mt-1 ml-9 opacity-70"><ExternalLink size={10}/> {lead.tipo_origem === 'play_store' && !lead.developer_site ? 'Abrir Play Store' : 'Abrir Site'}</a>}
+                      {(lead.site_oficial || (!isMapsUrl(lead.url) && lead.url)) && (
+                        <a href={(() => { const u = lead.site_oficial || lead.url; return u.startsWith('http') ? u : `https://${u}`; })()} target="_blank" rel="noreferrer" className="text-primary hover:underline text-[10px] flex items-center gap-1 mt-1 ml-9 opacity-70"><ExternalLink size={10}/> {lead.tipo_origem === 'play_store' && !lead.developer_site ? 'Abrir Play Store' : 'Abrir Site'}</a>
+                      )}
+                      {!lead.site_oficial && isMapsUrl(lead.url) && lead.url && (
+                        <a href={lead.url} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline text-[10px] flex items-center gap-1 mt-1 ml-9 opacity-60"><ExternalLink size={10}/> Abrir no Maps</a>
+                      )}
                       {lead.app_store_url && lead.developer_site && (
                         <a href={lead.app_store_url} target="_blank" rel="noreferrer" className="text-emerald-300 hover:underline text-[10px] flex items-center gap-1 mt-1 ml-9 opacity-80">
                           <ExternalLink size={10}/> Abrir App
