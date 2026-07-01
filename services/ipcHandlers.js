@@ -899,6 +899,7 @@ function setupIpcHandlers(ipcMain, mainWindow) {
         new Promise((resolve) => {
           const TIMEOUT = 30000;
           const start = Date.now();
+          let clicked = false;
           const tick = setInterval(() => {
             // QR code — sessão expirou
             if (document.querySelector('[data-testid="qrcode"]') ||
@@ -912,22 +913,34 @@ function setupIpcHandlers(ipcMain, mainWindow) {
               clearInterval(tick);
               return resolve({ status: 'invalid-phone' });
             }
-            // Botão enviar
-            const btn = document.querySelector('[data-testid="send"]') ||
-                        document.querySelector('span[data-icon="send"]') ||
-                        document.querySelector('[data-testid="compose-btn-send"]') ||
-                        document.querySelector('button[aria-label="Send"]') ||
-                        document.querySelector('button[aria-label="Enviar"]');
-            if (btn) {
-              btn.click();
-              clearInterval(tick);
-              return resolve({ status: 'sent' });
+
+            if (!clicked) {
+              // Fase 1 — aguarda botão enviar e clica
+              const btn = document.querySelector('[data-testid="send"]') ||
+                          document.querySelector('span[data-icon="send"]') ||
+                          document.querySelector('[data-testid="compose-btn-send"]') ||
+                          document.querySelector('button[aria-label="Send"]') ||
+                          document.querySelector('button[aria-label="Enviar"]');
+              if (btn) {
+                btn.click();
+                clicked = true;
+              }
+            } else {
+              // Fase 2 — aguarda textarea esvaziar (confirma envio e evita texto duplo)
+              const box = document.querySelector('[contenteditable="true"][data-tab="10"]') ||
+                          document.querySelector('[contenteditable="true"].selectable-text') ||
+                          document.querySelector('[data-testid="conversation-compose-box-input"]');
+              if (!box || !box.textContent.trim()) {
+                clearInterval(tick);
+                return resolve({ status: 'sent' });
+              }
             }
+
             if (Date.now() - start > TIMEOUT) {
               clearInterval(tick);
-              return resolve({ status: 'timeout' });
+              return resolve({ status: clicked ? 'sent' : 'timeout' });
             }
-          }, 700);
+          }, 500);
         })
       `, true);
 

@@ -595,17 +595,173 @@ const crud = {
   },
 
   getLatestAnalyses: async (limit = 5) => {
-    // Busca os mais recentes de ambas as tabelas e une no JS (excluindo bloqueados)
     const sites = await allQuery(`SELECT *, 'site' as type FROM leads_sites WHERE is_blocked = 0 ORDER BY data_coleta DESC LIMIT ?`, [limit]);
     const sistemas = await allQuery(`SELECT *, 'sistema' as type FROM leads_sistemas WHERE is_blocked = 0 ORDER BY data_coleta DESC LIMIT ?`, [limit]);
     const linkedin = await allQuery(`SELECT *, 'linkedin' as type FROM leads_linkedin WHERE is_blocked = 0 ORDER BY data_coleta DESC LIMIT ?`, [limit]);
-    
-    // Concatena, ordena por data e limita
     const combined = [...sites, ...sistemas, ...linkedin]
       .sort((a, b) => new Date(b.data_coleta) - new Date(a.data_coleta))
       .slice(0, limit);
-      
     return combined;
+  },
+
+  // Task 1 — Deduplicação entre execuções
+  getExistingLeadKeys: async () => {
+    const keys = new Set();
+    const sites = await allQuery(`SELECT url, maps_url, titulo, localizacao FROM leads_sites`);
+    const sistemas = await allQuery(`SELECT url, package_id FROM leads_sistemas`);
+    sites.forEach(r => {
+      if (r.url) keys.add(r.url);
+      if (r.maps_url) keys.add(r.maps_url);
+      if (r.titulo && r.localizacao) keys.add(`${r.titulo}|${r.localizacao}`);
+    });
+    sistemas.forEach(r => {
+      if (r.url) keys.add(r.url);
+      if (r.package_id) keys.add(r.package_id);
+    });
+    return keys;
+  },
+
+  // Task 3 — Dashboard estatísticas avançadas
+  getDashboardStats: async () => {
+    const today = new Date().toISOString().split('T')[0];
+    const thirteenDaysAgo = new Date(Date.now() - 13 * 86400000).toISOString().split('T')[0];
+
+    const [
+      totalSites, totalSistemas, totalLinkedin,
+      emailEnviados, wppEnviados, responderam,
+      reunioes, fechados,
+      followupsDue
+    ] = await Promise.all([
+      getQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE is_blocked=0`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_sistemas WHERE is_blocked=0`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_linkedin WHERE is_blocked=0`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE email_enviado=1`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE wpp_enviado=1`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE respondeu_email=1`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE funil_status='reuniao'`),
+      getQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE funil_status='fechado'`),
+      allQuery(`SELECT COUNT(*) as c FROM leads_sites WHERE followup_date IS NOT NULL AND followup_date <= ? AND funil_status NOT IN ('fechado','perdido') AND is_blocked=0`, [today])
+    ]);
+
+    // Leads por dia (últimos 14 dias)
+    const dailyRows = await allQuery(
+      `SELECT substr(data_coleta,1,10) as dia, COUNT(*) as total
+       FROM leads_sites WHERE data_coleta >= ? GROUP BY dia ORDER BY dia`,
+      [thirteenDaysAgo]
+    );
+    const dailyMap = {};
+    dailyRows.forEach(r => { dailyMap[r.dia] = r.total; });
+    const dailyLeads = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000).toISOString().split('T')[0];
+      dailyLeads.push({ dia: d, total: dailyMap[d] || 0 });
+    }
+
+    return {
+      totals: {
+        sites: totalSites?.c || 0,
+        sistemas: totalSistemas?.c || 0,
+        linkedin: totalLinkedin?.c || 0,
+        total: (totalSites?.c || 0) + (totalSistemas?.c || 0) + (totalLinkedin?.c || 0)
+      },
+      funil: {
+        capturado: totalSites?.c || 0,
+        contatado: emailEnviados?.c || wppEnviados?.c || 0,
+        respondeu: responderam?.c || 0,
+        reuniao: reunioes?.c || 0,
+        fechado: fechados?.c || 0
+      },
+      followupsDue: followupsDue[0]?.c || 0,
+      emailEnviados: emailEnviados?.c || 0,
+      wppEnviados: wppEnviados?.c || 0,
+      dailyLeads
+    };
+  },
+
+  // Task 6 — Follow-ups vencidos
+  getFollowupsDue: async () => {
+    const today = new Date().toISOString().split('T')[0];
+    const sites = await allQuery(
+      `SELECT *, 'sites' as _tipo FROM leads_sites WHERE followup_date IS NOT NULL AND followup_date <= ? AND funil_status NOT IN ('fechado','perdido') AND is_blocked=0 ORDER BY followup_date`,
+      [today]
+    );
+    const sistemas = await allQuery(
+      `SELECT *, 'sistemas' as _tipo FROM leads_sistemas WHERE followup_date IS NOT NULL AND followup_date <= ? AND funil_status NOT IN ('fechado','perdido') AND is_blocked=0 ORDER BY followup_date`,
+      [today]
+    );
+    return [...sites, ...sistemas];
+  },
+
+  // Task 9 — Templates de mensagem por nicho
+  getMessageTemplates: async () => {
+    return allQuery(`SELECT * FROM message_templates WHERE ativo=1 ORDER BY nicho, canal`);
+  },
+  saveMessageTemplate: async (data) => {
+    if (data.id) {
+      return runQuery(
+        `UPDATE message_templates SET nicho=?, canal=?, has_site=?, nome=?, corpo=?, ativo=1 WHERE id=?`,
+        [data.nicho || null, data.canal || 'whatsapp', data.has_site ?? null, data.nome, data.corpo, data.id]
+      );
+    }
+    return runQuery(
+      `INSERT INTO message_templates (nicho, canal, has_site, nome, corpo) VALUES (?,?,?,?,?)`,
+      [data.nicho || null, data.canal || 'whatsapp', data.has_site ?? null, data.nome, data.corpo]
+    );
+  },
+  deleteMessageTemplate: async (id) => {
+    return runQuery(`UPDATE message_templates SET ativo=0 WHERE id=?`, [id]);
+  },
+
+  // T07 — Histórico de e-mails por lead
+  addEmailHistory: async (leadId, leadTipo, toEmail, subject, bodyPreview) => {
+    return runQuery(
+      `INSERT INTO email_history (lead_id, lead_tipo, to_email, subject, body_preview) VALUES (?,?,?,?,?)`,
+      [leadId, leadTipo, toEmail || '', subject || '', (bodyPreview || '').slice(0, 300)]
+    );
+  },
+  getEmailHistory: async (leadId, leadTipo) => {
+    return allQuery(`SELECT * FROM email_history WHERE lead_id=? AND lead_tipo=? ORDER BY sent_at DESC LIMIT 20`, [leadId, leadTipo]);
+  },
+
+  // T13 — Score override
+  saveScoreOverride: async (table, id, value) => {
+    const tbl = table === 'sistema' ? 'leads_sistemas' : 'leads_sites';
+    return runQuery(`UPDATE ${tbl} SET score_override=? WHERE id=?`, [value === null ? null : Number(value), id]);
+  },
+
+  // T14 — Ticket value
+  saveTicketValue: async (table, id, value) => {
+    const tbl = table === 'sistema' ? 'leads_sistemas' : 'leads_sites';
+    return runQuery(`UPDATE ${tbl} SET ticket_value=? WHERE id=?`, [value === null ? null : Number(value), id]);
+  },
+
+  // T27 — Activity log
+  logActivity: async (tipo, detalhe, extra) => {
+    return runQuery(`INSERT INTO activity_log (tipo, detalhe, extra) VALUES (?,?,?)`,
+      [tipo, detalhe || '', extra ? JSON.stringify(extra) : null]);
+  },
+  getActivityLog: async (limit = 50) => {
+    return allQuery(`SELECT * FROM activity_log ORDER BY criado_em DESC LIMIT ?`, [limit]);
+  },
+
+  // T10 — Backup/Restore/Export
+  exportLeadsJson: async () => {
+    const sites = await allQuery(`SELECT * FROM leads_sites WHERE is_blocked=0`);
+    const sistemas = await allQuery(`SELECT * FROM leads_sistemas WHERE is_blocked=0`);
+    const linkedin = await allQuery(`SELECT * FROM leads_linkedin WHERE is_blocked=0`);
+    const interacoes = await allQuery(`SELECT * FROM crm_interacoes`);
+    return { sites, sistemas, linkedin, interacoes, exportedAt: new Date().toISOString() };
+  },
+  importLeadsJson: async (data) => {
+    let imported = 0;
+    const sites = Array.isArray(data.sites) ? data.sites : [];
+    for (const lead of sites) {
+      try {
+        const r = await crud.createLeadSite(lead);
+        if (!r.duplicate) imported++;
+      } catch (_) {}
+    }
+    return { imported, total: sites.length };
   }
 };
 

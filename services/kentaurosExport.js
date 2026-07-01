@@ -16,8 +16,112 @@ const normalizeKentaurosBaseUrl = (input) => {
   return url;
 };
 
+const cleanText = (value) => String(value || '').trim();
+
+const normalizeEmail = (value) => cleanText(value).toLowerCase();
+
+const normalizePhoneDigits = (value) => cleanText(value).replace(/\D/g, '');
+
+const extractLeadDomain = (value) => {
+  const raw = cleanText(value);
+  if (!raw) return '';
+  try {
+    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {
+    return raw
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .split('/')[0]
+      .toLowerCase();
+  }
+};
+
+const getLeadWebsite = (lead = {}) => (
+  lead.site_oficial || lead.website || lead.url || lead.maps_url || ''
+);
+
+const getLeadEmail = (lead = {}) => (
+  lead.email || lead.contato_email || lead.developer_email || ''
+);
+
+const getLeadPhone = (lead = {}) => (
+  lead.whatsapp || lead.numero_whatsapp || lead.whatsapp_number || lead.telefone || lead.phone || lead.contato_telefone || ''
+);
+
+const getLeadAiScore = (lead = {}) => Number(lead.score_design || lead.score_ux || lead.score || 0);
+
+const getMissingRequiredFields = ({ domain, email, phoneDigits, aiScore }) => {
+  const missing = [];
+  if (!domain) missing.push('website');
+  if (!email) missing.push('email');
+  if (phoneDigits.length < 10) missing.push('phone_or_whatsapp');
+  if (aiScore <= 0) missing.push('ai_score');
+  return missing;
+};
+
+const getEnrichmentSuggestions = (missingRequiredFields = []) => {
+  const suggestions = new Set();
+  missingRequiredFields.forEach((field) => {
+    if (field === 'website') suggestions.add('validate_website');
+    if (field === 'email') suggestions.add('capture_email');
+    if (field === 'phone_or_whatsapp') suggestions.add('capture_whatsapp');
+    if (field === 'ai_score') suggestions.add('run_ai_quality_analysis');
+  });
+  return Array.from(suggestions);
+};
+
+const buildCapLeadQualityProfile = (lead = {}) => {
+  const website = getLeadWebsite(lead);
+  const domain = extractLeadDomain(website);
+  const email = normalizeEmail(getLeadEmail(lead));
+  const phoneDigits = normalizePhoneDigits(getLeadPhone(lead));
+  const aiScore = getLeadAiScore(lead);
+  const flags = [];
+  let score = 30;
+
+  if (domain) score += 24;
+  else flags.push('missing_website');
+
+  if (email) score += 20;
+  else flags.push('missing_email');
+
+  if (phoneDigits.length >= 10) score += 16;
+  else flags.push('missing_phone_or_whatsapp');
+
+  if (aiScore > 0) score += Math.min(18, Math.round(aiScore / 6));
+  else flags.push('missing_ai_score');
+
+  if (lead.problemas || lead.issues || lead.oportunidades) {
+    score += 8;
+    flags.push('site_pain_detected');
+  }
+
+  const boundedScore = Math.max(0, Math.min(100, score));
+  const missingRequiredFields = getMissingRequiredFields({ domain, email, phoneDigits, aiScore });
+  const requiredFieldsStatus = missingRequiredFields.length ? 'incomplete' : 'complete';
+  const status = boundedScore >= 75 ? 'qualified' : 'review_required';
+
+  return {
+    version: 2,
+    score: boundedScore,
+    status,
+    flags,
+    dedupeKey: domain || email || phoneDigits || cleanText(lead.titulo || lead.nome || lead.empresa).toLowerCase(),
+    missingRequiredFields,
+    enrichmentSuggestions: getEnrichmentSuggestions(missingRequiredFields),
+    requiredFieldsStatus,
+    recommendedAction: status === 'qualified' && requiredFieldsStatus === 'complete'
+      ? 'export_to_kentauros'
+      : 'review_before_export',
+    externalAutomationApprovalRequired: true,
+  };
+};
+
 const normalizeLeadForKentauros = (lead) => {
   const pricedLead = applyAiProjectValue(lead);
+  const quality = buildCapLeadQualityProfile(pricedLead);
+  const normalizedEmail = normalizeEmail(getLeadEmail(pricedLead));
 
   return {
     nome: pricedLead.nome || pricedLead.titulo || pricedLead.company || '',
@@ -25,7 +129,7 @@ const normalizeLeadForKentauros = (lead) => {
     titulo: pricedLead.titulo || pricedLead.nome || '',
     site_oficial: pricedLead.site_oficial || pricedLead.website || pricedLead.url || '',
     url: pricedLead.site_oficial || pricedLead.website || pricedLead.url || pricedLead.maps_url || '',
-    email: pricedLead.email || pricedLead.contato_email || '',
+    email: normalizedEmail,
     telefone: pricedLead.telefone || pricedLead.phone || '',
     nicho: pricedLead.nicho || pricedLead.industry || '',
     categoria: pricedLead.categoria || pricedLead.category || '',
@@ -43,6 +147,74 @@ const normalizeLeadForKentauros = (lead) => {
     wpp_enviado: pricedLead.wpp_enviado ? 1 : 0,
     whatsappMessageStatus: pricedLead.wpp_enviado ? 'sent' : 'pending',
     whatsappSentAt: pricedLead.whatsappSentAt || pricedLead.wpp_enviado_at || '',
+    dataQualityScore: quality.score,
+    dataQualityStatus: quality.status,
+    dataQualityVersion: quality.version,
+    qualityFlags: quality.flags,
+    missingRequiredFields: quality.missingRequiredFields,
+    enrichmentSuggestions: quality.enrichmentSuggestions,
+    requiredFieldsStatus: quality.requiredFieldsStatus,
+    qualityRecommendation: quality.recommendedAction,
+    externalAutomationApprovalRequired: quality.externalAutomationApprovalRequired,
+    capLeadDedupeKey: quality.dedupeKey,
+    capLeadExternalId: pricedLead.id ? `caplead_${pricedLead.id}` : quality.dedupeKey,
+  };
+};
+
+const getNormalizedLeadQualityScore = (lead = {}) => Number(lead.dataQualityScore || lead.score || 0);
+
+const dedupeLeadsForKentauros = (leads = []) => {
+  const byKey = new Map();
+
+  leads.forEach((lead) => {
+    const key = lead.capLeadDedupeKey || buildCapLeadQualityProfile(lead).dedupeKey;
+    if (!key) return;
+    const current = byKey.get(key);
+    if (!current || getNormalizedLeadQualityScore(lead) >= getNormalizedLeadQualityScore(current)) {
+      byKey.set(key, lead);
+    }
+  });
+
+  return Array.from(byKey.values());
+};
+
+const countListValues = (items = []) => items.reduce((acc, item) => {
+  const key = cleanText(item);
+  if (!key) return acc;
+  acc[key] = (acc[key] || 0) + 1;
+  return acc;
+}, {});
+
+const buildCapLeadExportQualitySummary = ({ originalLeads = [], normalizedLeads = [] } = {}) => {
+  const scores = normalizedLeads.map((lead) => Number(lead.dataQualityScore || 0));
+  const reviewRequired = normalizedLeads.filter((lead) =>
+    lead.dataQualityStatus === 'review_required' ||
+    lead.requiredFieldsStatus === 'incomplete'
+  ).length;
+  const readyToExport = normalizedLeads.filter((lead) =>
+    lead.dataQualityStatus === 'qualified' &&
+    lead.requiredFieldsStatus === 'complete'
+  ).length;
+  const missingRequiredFields = normalizedLeads.flatMap((lead) => lead.missingRequiredFields || []);
+  const enrichmentSuggestions = normalizedLeads.flatMap((lead) => lead.enrichmentSuggestions || []);
+
+  return {
+    qualityCycle: 3,
+    totalCaptured: originalLeads.length,
+    totalExportable: normalizedLeads.length,
+    duplicatesRemoved: Math.max(0, originalLeads.length - normalizedLeads.length),
+    averageScore: scores.length
+      ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
+      : 0,
+    readyToExport,
+    reviewRequired,
+    missingRequiredFields: countListValues(missingRequiredFields),
+    enrichmentSuggestions: countListValues(enrichmentSuggestions),
+    qualityGate: reviewRequired > 0 ? 'review_before_external_automation' : 'ready_for_kentauros_import',
+    externalAutomationApprovalRequired: true,
+    recommendedAction: reviewRequired > 0
+      ? 'enrich_before_external_automation'
+      : 'send_to_kentauros_with_human_governance',
   };
 };
 
@@ -223,9 +395,13 @@ async function exportLeadsToKentauros({
   }
 
   const captureSourceName = await getCaptureSourceName(capturedBySource);
-  const normalizedLeads = resolvedLeads.map((lead) =>
+  const normalizedLeads = dedupeLeadsForKentauros(resolvedLeads.map((lead) =>
     normalizeLeadForKentauros({ ...lead, captureSource: captureSourceName })
-  );
+  ));
+  const qualitySummary = buildCapLeadExportQualitySummary({
+    originalLeads: resolvedLeads,
+    normalizedLeads,
+  });
   const meta = {
     userId: userId ?? config.userId ?? 1,
     userEmail,
@@ -249,6 +425,7 @@ async function exportLeadsToKentauros({
         batch: batchIndex,
         batches,
         message: `Enviando lote ${batchIndex}/${batches} (${batch.length} leads)...`,
+        qualitySummary,
       });
     }
 
@@ -268,6 +445,7 @@ async function exportLeadsToKentauros({
     duplicates: totals.duplicates,
     failed: totals.failed,
     summary: totals,
+    qualitySummary,
   };
 }
 
@@ -303,4 +481,7 @@ module.exports = {
   syncCapturedLeadsToKentauros,
   testKentaurosConnection,
   normalizeLeadForKentauros,
+  buildCapLeadQualityProfile,
+  buildCapLeadExportQualitySummary,
+  dedupeLeadsForKentauros,
 };

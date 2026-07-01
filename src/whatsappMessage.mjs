@@ -6,13 +6,23 @@ export function normalizeWhatsappPhone(value = '') {
   return digits;
 }
 
+function isMapsUrl(url = '') {
+  return /google\.com\/(maps|search)/i.test(String(url));
+}
+
 function hasWebsite(lead = {}) {
-  return !!(lead.url || lead.site_oficial || lead.developer_site);
+  return !!(
+    lead.site_oficial ||
+    lead.developer_site ||
+    (lead.url && !isMapsUrl(lead.url))
+  );
 }
 
 export function buildWhatsappMessage(lead = {}, senderName = 'Kentauros') {
   const company = lead.nome || lead.titulo || lead.empresa || 'sua empresa';
-  const location = lead.localizacao || lead.location || '';
+  const rawLocation = lead.localizacao || lead.location || '';
+  // Use apenas bairro/cidade — ignora número de rua e CEP
+  const location = rawLocation.split(/,\s*\d|,\s*[A-Z]{2},|\s*-\s*CEP|\s*-\s*SP,|\s*-\s*RJ,|\s*-\s*MG,/)[0].split(/,/).slice(0, 2).join(',').trim();
 
   if (hasWebsite(lead)) {
     return [

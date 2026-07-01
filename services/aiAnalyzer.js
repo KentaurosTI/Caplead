@@ -154,7 +154,33 @@ async function runTechnicalAudit(page) {
 
         metrics.mobile.score = Math.min(metrics.mobile.max, mobilePoints);
 
-        const totalScore = metrics.performance.score + metrics.seo.score + metrics.ux.score + metrics.mobile.score;
+        // --- 5. IMAGENS (até -15 pts de penalidade) ---
+        let imagePenalty = 0;
+        const allImgs = Array.from(document.querySelectorAll('img'));
+        if (allImgs.length > 0) {
+          const withoutLazy = allImgs.filter(img => img.getAttribute('loading') !== 'lazy').length;
+          const withoutDims = allImgs.filter(img => !img.getAttribute('width') || !img.getAttribute('height')).length;
+          const legacyFmt = allImgs.filter(img => /\.(jpg|jpeg|png|gif)(\?|$)/i.test(img.src)).length;
+          if (withoutLazy > 3) { imagePenalty += 5; addIssue('Performance', `${withoutLazy} imagens sem lazy loading (aumenta tempo de carregamento).`); }
+          if (withoutDims > 3) { imagePenalty += 5; addIssue('Performance', `${withoutDims} imagens sem largura/altura definida (causa instabilidade de layout).`); }
+          if (legacyFmt > 2 && legacyFmt / allImgs.length > 0.5) { imagePenalty += 5; addIssue('Performance', 'Imagens em formato legado (JPG/PNG) — WebP reduziria até 35% do tamanho.'); }
+        }
+
+        // --- 6. CSS BLOQUEANTE (até -10 pts de penalidade) ---
+        let cssPenalty = 0;
+        const blockingSheets = document.querySelectorAll('link[rel="stylesheet"]:not([media="print"])');
+        const preloadedSheets = document.querySelectorAll('link[rel="preload"][as="style"]');
+        const hasGoogleFontsSwap = html.includes('display=swap') || html.includes('font-display:swap');
+        if (blockingSheets.length > 3 && preloadedSheets.length === 0) {
+          cssPenalty += 5;
+          addIssue('Performance', `${blockingSheets.length} folhas CSS bloqueantes no carregamento sem preload configurado.`);
+        }
+        if (html.includes('fonts.googleapis.com') && !hasGoogleFontsSwap) {
+          cssPenalty += 5;
+          addIssue('Design', 'Google Fonts sem font-display:swap — bloqueia renderização do texto.');
+        }
+
+        const totalScore = metrics.performance.score + metrics.seo.score + metrics.ux.score + metrics.mobile.score - imagePenalty - cssPenalty;
         
         return {
             score: Math.round(totalScore),

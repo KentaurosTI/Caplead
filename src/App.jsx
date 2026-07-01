@@ -313,6 +313,7 @@ export default function App() {
 
   // Task 9 — Templates de mensagem
   const [messageTemplates, setMessageTemplates] = useState([]);
+  const messageTemplatesRef = useRef([]);
   const [templatesModal, setTemplatesModal] = useState(false);
   const [templateForm, setTemplateForm] = useState({ id: null, nicho: '', canal: 'whatsapp', has_site: null, nome: '', corpo: '' });
 
@@ -369,6 +370,7 @@ export default function App() {
 
   // Sync wppPilot state into ref para uso em loops assíncronos
   useEffect(() => { wppPilotRef.current = wppPilot; }, [wppPilot]);
+  useEffect(() => { messageTemplatesRef.current = messageTemplates; }, [messageTemplates]);
 
   // Reset pagination when changing menu or filters
   useEffect(() => {
@@ -1288,6 +1290,38 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
   // ─── WhatsApp AutoPilot ───────────────────────────────────────────────────
   const wppSleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+  const pickWppTemplate = (lead) => {
+    const templates = messageTemplatesRef.current.filter(t => t.canal === 'whatsapp');
+    if (!templates.length) return null;
+    const leadHasSite = !!(lead.site_oficial || lead.developer_site || (lead.url && !/google\.com\/(maps|search)/i.test(String(lead.url))));
+    const leadNicho = (lead.nicho || lead.categoria || lead.tipo_negocio || '').toLowerCase();
+    const score = (t) => {
+      let s = 0;
+      if (t.has_site === null || t.has_site === undefined) s += 1;
+      else if (!!t.has_site === leadHasSite) s += 3;
+      else return -1;
+      if (t.nicho && leadNicho && leadNicho.includes(t.nicho.toLowerCase())) s += 2;
+      else if (!t.nicho) s += 0;
+      else return s - 1;
+      return s;
+    };
+    const ranked = templates.map(t => ({ t, s: score(t) })).filter(x => x.s >= 0).sort((a, b) => b.s - a.s);
+    return ranked[0]?.t || null;
+  };
+
+  const applyWppTemplate = (template, lead) => {
+    if (!template) return buildWhatsappMessage(lead);
+    const nome = lead.nome || lead.titulo || lead.empresa || 'sua empresa';
+    const nicho = lead.nicho || lead.categoria || lead.tipo_negocio || 'seu segmento';
+    const problema1 = lead.problema1 || lead.analysis_summary || 'presença digital limitada';
+    const url = lead.site_oficial || lead.developer_site || (!(/google\.com\/(maps|search)/i.test(String(lead.url || ''))) ? lead.url : '') || '';
+    return template.corpo
+      .replace(/\{nome\}/g, nome)
+      .replace(/\{nicho\}/g, nicho)
+      .replace(/\{problema1\}/g, problema1)
+      .replace(/\{url\}/g, url);
+  };
+
   const processNextWppLead = async () => {
     if (!wppPilotRunning.current) return;
 
@@ -1309,7 +1343,8 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
     const lead = queue[currentIdx];
     const phone = normalizeWhatsappPhone(lead.telefone || '');
-    const message = buildWhatsappMessage(lead);
+    const template = pickWppTemplate(lead);
+    const message = applyWppTemplate(template, lead);
 
     if (!phone) {
       setWppPilot(p => ({
@@ -1346,13 +1381,8 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     }
   };
 
-  const startWppAutoPilot = async () => {
-    const pendingLeads = whatsappCommercialLeads.filter(l => !l.wpp_enviado && l.telefone);
-    if (!pendingLeads.length) {
-      showAppAlert({ title: 'Fila vazia', message: 'Todos os leads com WhatsApp já foram contatados ou não há leads elegíveis.', variant: 'info' });
-      return;
-    }
-    setWppPilot({ active: true, status: 'initializing', queue: pendingLeads, currentIdx: 0, results: [] });
+  const _launchWppPilot = async (queue) => {
+    setWppPilot({ active: true, status: 'initializing', queue, currentIdx: 0, results: [] });
     wppPilotRunning.current = true;
     wppPilotPaused.current = false;
 
@@ -1363,7 +1393,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       return;
     }
 
-    await wppSleep(4000); // aguarda carregamento inicial
+    await wppSleep(4000);
 
     const check = await window.electronAPI.wppPilotCheck();
     if (!check.success || check.needsQR || !check.loggedIn) {
@@ -1373,6 +1403,26 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
 
     setWppPilot(p => ({ ...p, status: 'running' }));
     processNextWppLead();
+  };
+
+  const startWppAutoPilot = async () => {
+    const pendingLeads = whatsappCommercialLeads.filter(l => !l.wpp_enviado && l.telefone);
+    if (!pendingLeads.length) {
+      showAppAlert({ title: 'Fila vazia', message: 'Todos os leads com WhatsApp já foram contatados ou não há leads elegíveis.', variant: 'info' });
+      return;
+    }
+    await _launchWppPilot(pendingLeads);
+  };
+
+  const startWppAutoPilotWithLeads = async (leads) => {
+    const queue = leads.filter(l => !l.wpp_enviado && l.telefone).map(l => ({ ...l, _typeCode: l._typeCode || 'sites' }));
+    if (!queue.length) {
+      showAppAlert({ title: 'Sem leads elegíveis', message: 'Nenhum dos leads selecionados tem WhatsApp disponível ou já foram contatados.', variant: 'info' });
+      return;
+    }
+    setActiveMenu('whatsapp-comercial');
+    setSelectedLeadKeys([]);
+    await _launchWppPilot(queue);
   };
 
   const resumeWppAfterQr = async () => {
@@ -1425,7 +1475,18 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       return;
     }
 
-    const whatsappUrl = buildWhatsappUrl(lead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus');
+    const rawPhone = normalizeWhatsappPhone(phone.digits || lead.telefone || lead.phone || '');
+    if (!rawPhone) {
+      showAppAlert({ title: 'WhatsApp não encontrado', message: 'Não foi possível preparar o link de WhatsApp deste lead.', variant: 'warning' });
+      return;
+    }
+
+    const matchedTemplate = pickWppTemplate(lead);
+    const messageText = matchedTemplate
+      ? applyWppTemplate(matchedTemplate, lead)
+      : buildWhatsappMessage(lead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus');
+
+    const whatsappUrl = `https://wa.me/${rawPhone}?text=${encodeURIComponent(messageText)}`;
     if (!whatsappUrl) {
       showAppAlert({ title: 'WhatsApp não encontrado', message: 'Não foi possível preparar o link de WhatsApp deste lead.', variant: 'warning' });
       return;
@@ -3885,7 +3946,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               ) : (
                 <div className="space-y-3">
                   {messageTemplates.map(t => (
-                    <div key={t.id} className="flex items-start gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+                    <div key={t.id} className={`flex items-start gap-3 p-3 rounded-xl border transition-colors ${templateForm.id === t.id ? 'bg-violet-500/10 border-violet-500/30' : 'bg-white/5 border-white/10'}`}>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-white font-semibold text-sm">{t.nome}</span>
@@ -3895,26 +3956,49 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                         </div>
                         <p className="text-slate-400 text-xs mt-1 line-clamp-2">{t.corpo}</p>
                       </div>
-                      <button
-                        onClick={async () => {
-                          if (confirm(`Excluir template "${t.nome}"?`)) {
-                            await window.electronAPI.deleteMessageTemplate?.(t.id);
-                            const res = await window.electronAPI.getMessageTemplates?.();
-                            if (res?.success) setMessageTemplates(res.data || []);
-                          }
-                        }}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          title="Editar template"
+                          onClick={() => setTemplateForm({ id: t.id, nome: t.nome, canal: t.canal || 'whatsapp', nicho: t.nicho || '', has_site: t.has_site ?? null, corpo: t.corpo })}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-violet-400 hover:bg-violet-500/10 transition-all"
+                        >
+                          <Edit3 size={14} />
+                        </button>
+                        <button
+                          title="Excluir template"
+                          onClick={async () => {
+                            if (confirm(`Excluir template "${t.nome}"?`)) {
+                              await window.electronAPI.deleteMessageTemplate?.(t.id);
+                              if (templateForm.id === t.id) setTemplateForm({ id: null, nicho: '', canal: 'whatsapp', has_site: null, nome: '', corpo: '' });
+                              const res = await window.electronAPI.getMessageTemplates?.();
+                              if (res?.success) setMessageTemplates(res.data || []);
+                            }
+                          }}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* Form novo template */}
+              {/* Form novo/editar template */}
               <div className="pt-4 border-t border-white/10 space-y-3">
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Novo template</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {templateForm.id ? 'Editar template' : 'Novo template'}
+                  </p>
+                  {templateForm.id && (
+                    <button
+                      onClick={() => setTemplateForm({ id: null, nicho: '', canal: 'whatsapp', has_site: null, nome: '', corpo: '' })}
+                      className="text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+                    >
+                      <X size={12} /> Cancelar edição
+                    </button>
+                  )}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input
                     className="bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40"
@@ -3956,21 +4040,23 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   onChange={e => setTemplateForm(p => ({ ...p, corpo: e.target.value }))}
                 />
                 {templateForm.corpo && templateForm.canal === 'whatsapp' && (
-                  <div className="mt-2">
+                  <div className="mt-3">
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-2">Preview WhatsApp</p>
-                    <div className="bg-[#0b141a] rounded-2xl p-4 flex justify-end">
-                      <div className="max-w-[85%] bg-[#005c4b] text-[#e9edef] rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed shadow-md">
-                        {templateForm.corpo
-                          .replace(/\{nome\}/g, 'João Silva')
-                          .replace(/\{nicho\}/g, templateForm.nicho || 'saúde')
-                          .replace(/\{problema1\}/g, 'site lento no mobile')
-                          .replace(/\{url\}/g, 'empresa.com.br')
-                          .split('\n')
-                          .map((line, i) => {
-                            const formatted = line.replace(/\*([^*]+)\*/g, '<strong>$1</strong>').replace(/_([^_]+)_/g, '<em>$1</em>');
-                            return <span key={i} dangerouslySetInnerHTML={{ __html: formatted + (i < templateForm.corpo.split('\n').length - 1 ? '<br/>' : '') }} />;
-                          })}
-                        <div className="text-right text-[10px] text-[#8696a0] mt-1">10:42 ✓✓</div>
+                    <div className="bg-[#0b141a] rounded-2xl p-5 min-h-[180px]">
+                      <div className="flex justify-end">
+                        <div className="max-w-[92%] w-full bg-[#005c4b] text-[#e9edef] rounded-2xl rounded-tr-sm px-5 py-4 text-sm leading-relaxed shadow-md">
+                          {templateForm.corpo
+                            .replace(/\{nome\}/g, 'João Silva')
+                            .replace(/\{nicho\}/g, templateForm.nicho || 'saúde')
+                            .replace(/\{problema1\}/g, 'site lento no mobile')
+                            .replace(/\{url\}/g, 'empresa.com.br')
+                            .split('\n')
+                            .map((line, i, arr) => {
+                              const formatted = line.replace(/\*([^*]+)\*/g, '<strong>$1</strong>').replace(/_([^_]+)_/g, '<em>$1</em>');
+                              return <span key={i} dangerouslySetInnerHTML={{ __html: formatted + (i < arr.length - 1 ? '<br/>' : '') }} />;
+                            })}
+                          <div className="text-right text-[10px] text-[#8696a0] mt-2">10:42 ✓✓</div>
+                        </div>
                       </div>
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">*negrito* _itálico_ | variáveis preenchidas com exemplo</p>
@@ -3980,6 +4066,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   disabled={!templateForm.nome || !templateForm.corpo}
                   onClick={async () => {
                     await window.electronAPI.saveMessageTemplate?.({
+                      id: templateForm.id || undefined,
                       nome: templateForm.nome,
                       canal: templateForm.canal,
                       nicho: templateForm.nicho || null,
@@ -3992,7 +4079,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   }}
                   className="px-5 py-2.5 rounded-xl bg-violet-500 text-white font-bold text-sm hover:bg-violet-600 transition-all disabled:opacity-40"
                 >
-                  Salvar Template
+                  {templateForm.id ? 'Atualizar Template' : 'Salvar Template'}
                 </button>
               </div>
             </div>
@@ -4350,7 +4437,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     <div className="mt-4 bg-black/20 rounded-xl p-3">
                       <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1.5">Mensagem</p>
                       <p className="text-slate-300 text-xs leading-relaxed line-clamp-4">
-                        {buildWhatsappMessage(currentLead)}
+                        {applyWppTemplate(pickWppTemplate(currentLead), currentLead)}
                       </p>
                     </div>
                   </div>
@@ -5169,6 +5256,14 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
               <p className="text-xs text-slate-400 mt-0.5">Aplique ações somente nos itens marcados nesta lista.</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => startWppAutoPilotWithLeads(selectedInGrid)}
+                disabled={wppPilot.active || bulkProgress !== null}
+                className="px-4 py-2 rounded-xl bg-[#25d366]/15 border border-[#25d366]/40 text-[#25d366] hover:bg-[#25d366] hover:text-white text-xs font-bold transition-all disabled:opacity-50 flex items-center gap-1.5"
+                title="Iniciar envio automático via WhatsApp para os selecionados"
+              >
+                <MessageCircle size={14} /> Disparar WhatsApp
+              </button>
               <button
                 onClick={() => handleBulkEmail(selectedInGrid, typeCode)}
                 disabled={bulkProgress !== null}

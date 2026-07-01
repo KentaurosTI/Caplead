@@ -255,6 +255,68 @@ db.serialize(() => {
   db.run(`ALTER TABLE leads_linkedin ADD COLUMN problemas TEXT`, () => {});
   db.run(`ALTER TABLE leads_linkedin ADD COLUMN breakdown_score TEXT`, () => {});
 
+  // Task 9 — Templates de mensagem por nicho
+  db.run(`
+    CREATE TABLE IF NOT EXISTS message_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nicho TEXT,
+      canal TEXT NOT NULL DEFAULT 'whatsapp',
+      has_site INTEGER,
+      nome TEXT NOT NULL,
+      corpo TEXT NOT NULL,
+      ativo INTEGER DEFAULT 1,
+      criado_em TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Seeds dos templates padrão (inseridos apenas se a tabela estiver vazia)
+  db.get(`SELECT COUNT(*) as c FROM message_templates`, [], (err, row) => {
+    if (err || (row && row.c > 0)) return;
+    const defaults = [
+      { nicho: null, canal: 'whatsapp', has_site: 1, nome: 'Com site — Diagnóstico rápido', corpo: 'Olá! Tudo bem?\n\nEstava analisando rapidamente o {{empresa}}{{cidade}} e percebi alguns pontos que podem estar dificultando a transformação de visitantes em novos contatos.\n\nNada grave, mas são detalhes que costumam fazer pessoas interessadas desistirem antes mesmo de iniciar uma conversa.\n\nTrabalho na Kentauros, uma empresa especializada em identificar e corrigir esses gargalos digitais por meio de soluções tecnológicas.\n\nSe fizer sentido para você, posso te enviar um diagnóstico rápido com os 3 principais pontos que observei.' },
+      { nicho: null, canal: 'whatsapp', has_site: 0, nome: 'Sem site — Proposta com exemplo', corpo: 'Olá! Tudo bem?\n\nVi que o {{empresa}}{{cidade}} ainda não tem um site e quis entrar em contato.\n\nMuitas empresas locais perdem clientes todo dia simplesmente por não aparecerem quando alguém pesquisa no Google.\n\nNa Kentauros criamos sites profissionais e rápidos focados em trazer novos clientes — e já ajudamos negócios parecidos com o seu.\n\nPosso te enviar um exemplo do que faríamos para o {{empresa}}? É rápido e sem custo nenhum.' },
+      { nicho: 'saúde', canal: 'whatsapp', has_site: 1, nome: 'Saúde — Clínicas com site', corpo: 'Olá! Tudo bem?\n\nEstava fazendo uma análise de clínicas em {{cidade}} e vi o site do {{empresa}}.\n\nIdentifiquei alguns pontos que podem estar reduzindo o número de pacientes que entram em contato pelo site — especialmente vindo do Google.\n\nSou da Kentauros, especialistas em presença digital para clínicas e consultórios. Posso te enviar os 3 principais pontos em menos de 2 minutos?' },
+      { nicho: 'juridico', canal: 'whatsapp', has_site: 1, nome: 'Jurídico — Escritórios com site', corpo: 'Olá! Tudo bem?\n\nAnalisei o site do {{empresa}}{{cidade}} e notei alguns pontos técnicos que podem estar prejudicando o posicionamento no Google e a conversão de visitantes em clientes.\n\nAtuamos com presença digital para escritórios de advocacia e consultórios jurídicos. Posso compartilhar um diagnóstico rápido e sem compromisso?' },
+      { nicho: 'beleza', canal: 'whatsapp', has_site: 0, nome: 'Beleza — Sem site', corpo: 'Olá! Tudo bem?\n\nPassei pelo {{empresa}}{{cidade}} e vi que ainda não aparece no Google com site próprio.\n\nHoje, quem busca "salão de beleza em {{cidade}}" encontra a concorrência antes de você. Um site simples e rápido pode mudar isso completamente.\n\nCriamos sites para salões e estúdios com foco em agendar mais clientes. Posso te mostrar um exemplo?' }
+    ];
+    const stmt = db.prepare(`INSERT INTO message_templates (nicho, canal, has_site, nome, corpo) VALUES (?,?,?,?,?)`);
+    defaults.forEach(t => stmt.run([t.nicho, t.canal, t.has_site ?? null, t.nome, t.corpo]));
+    stmt.finalize();
+  });
+
+  // T13 — Score override manual
+  db.run(`ALTER TABLE leads_sites ADD COLUMN score_override INTEGER`, () => {});
+  db.run(`ALTER TABLE leads_sistemas ADD COLUMN score_override INTEGER`, () => {});
+
+  // T14 — Valor estimado do contrato
+  db.run(`ALTER TABLE leads_sites ADD COLUMN ticket_value REAL`, () => {});
+  db.run(`ALTER TABLE leads_sistemas ADD COLUMN ticket_value REAL`, () => {});
+
+  // T07 — Histórico de e-mails por lead
+  db.run(`
+    CREATE TABLE IF NOT EXISTS email_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL,
+      lead_tipo TEXT NOT NULL,
+      to_email TEXT,
+      subject TEXT,
+      body_preview TEXT,
+      sent_at TEXT DEFAULT (datetime('now')),
+      status TEXT DEFAULT 'sent'
+    )
+  `);
+
+  // T27 — Log de atividades do sistema
+  db.run(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tipo TEXT NOT NULL,
+      detalhe TEXT,
+      extra TEXT,
+      criado_em TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
   // Índices de Unicidade para evitar duplicatas
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_sites_url ON leads_sites (url)`);
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_sistemas_url ON leads_sistemas (url)`);
