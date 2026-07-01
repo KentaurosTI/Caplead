@@ -6510,9 +6510,16 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     const total = leads.length;
     const currentLead = leads[currentIdx] || null;
     const companyName = currentLead ? (currentLead.nome || currentLead.titulo || 'Lead') : '';
-    const wppUrl = currentLead
-      ? buildWhatsappUrl(currentLead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus')
-      : '';
+    const wppUrl = (() => {
+      if (!currentLead) return '';
+      const phone = normalizeWhatsappPhone(currentLead.telefone || currentLead.phone || '');
+      if (!phone) return '';
+      const tpl = pickWppTemplate(currentLead);
+      const msg = tpl
+        ? applyWppTemplate(tpl, currentLead)
+        : buildWhatsappMessage(currentLead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus');
+      return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+    })();
 
     const openAndAdvance = async () => {
       if (wppUrl) await window.electronAPI.openExternalUrl(wppUrl);
@@ -6604,7 +6611,13 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     </div>
                   </div>
                   <div className="bg-green-500/5 border border-green-500/15 rounded-xl p-3 text-xs text-slate-400 italic leading-relaxed">
-                    "{buildWhatsappUrl(currentLead, '').split('text=')[1] ? decodeURIComponent(buildWhatsappUrl(currentLead, '').split('text=')[1]).slice(0, 120) + '…' : 'Mensagem preparada.'}"
+                    "{(() => {
+                      const tpl = pickWppTemplate(currentLead);
+                      const msg = tpl
+                        ? applyWppTemplate(tpl, currentLead)
+                        : buildWhatsappMessage(currentLead, smtpConfig.signatureName || smtpConfig.user?.split('@')[0] || 'Matheus');
+                      return msg.slice(0, 120) + (msg.length > 120 ? '…' : '');
+                    })()}"
                   </div>
                 </div>
 
