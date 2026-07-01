@@ -1299,14 +1299,14 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       let s = 0;
       if (t.has_site === null || t.has_site === undefined) s += 1;
       else if (!!t.has_site === leadHasSite) s += 3;
-      else return -1;
+      else s -= 1; // penaliza mas não elimina — qualquer template bate o fallback padrão
       if (t.nicho && leadNicho && leadNicho.includes(t.nicho.toLowerCase())) s += 2;
       else if (!t.nicho) s += 0;
-      else return s - 1;
+      else s -= 1; // penaliza nicho errado mas mantém como candidato
       return s;
     };
-    const ranked = templates.map(t => ({ t, s: score(t) })).filter(x => x.s >= 0).sort((a, b) => b.s - a.s);
-    return ranked[0]?.t || null;
+    const ranked = templates.map(t => ({ t, s: score(t) })).sort((a, b) => b.s - a.s);
+    return ranked[0]?.t || null; // sempre retorna o melhor template, mesmo penalizado
   };
 
   const applyWppTemplate = (template, lead) => {
@@ -1315,11 +1315,22 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     const nicho = lead.nicho || lead.categoria || lead.tipo_negocio || 'seu segmento';
     const problema1 = lead.problema1 || lead.analysis_summary || 'presença digital limitada';
     const url = lead.site_oficial || lead.developer_site || (!(/google\.com\/(maps|search)/i.test(String(lead.url || ''))) ? lead.url : '') || '';
+    const cidade = lead.localizacao || lead.cidade || lead.location || '';
+    const telefone = lead.telefone || lead.phone || '';
     return template.corpo
-      .replace(/\{nome\}/g, nome)
-      .replace(/\{nicho\}/g, nicho)
-      .replace(/\{problema1\}/g, problema1)
-      .replace(/\{url\}/g, url);
+      // variáveis principais
+      .replace(/\{nome\}/gi, nome)
+      .replace(/\{empresa\}/gi, nome)
+      .replace(/\{nicho\}/gi, nicho)
+      .replace(/\{segmento\}/gi, nicho)
+      .replace(/\{problema1\}/gi, problema1)
+      .replace(/\{problema\}/gi, problema1)
+      .replace(/\{url\}/gi, url)
+      .replace(/\{url_site\}/gi, url)
+      .replace(/\{site\}/gi, url)
+      .replace(/\{cidade\}/gi, cidade)
+      .replace(/\{localizacao\}/gi, cidade)
+      .replace(/\{telefone\}/gi, telefone);
   };
 
   const processNextWppLead = async () => {
