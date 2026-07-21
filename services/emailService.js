@@ -44,7 +44,7 @@ async function buildTransportConfig() {
   const host = (await crud.getConfig('smtp_host'))?.valor || defaultSmtp.host;
   const portRaw = (await crud.getConfig('smtp_port'))?.valor || String(defaultSmtp.port);
   const secureRaw = (await crud.getConfig('smtp_secure'))?.valor;
-  const user = (await crud.getConfig('smtp_user'))?.valor || (await crud.getConfig('gmail_user'))?.valor || defaultSmtp.user;
+  const user = ((await crud.getConfig('smtp_user'))?.valor || (await crud.getConfig('gmail_user'))?.valor || defaultSmtp.user)?.toLowerCase();
   const rawPass = (await crud.getConfig('gmail_pass'))?.valor || process.env.CAPLEAD_SMTP_APP_PASSWORD || defaultSmtp.pass || defaultSmtp.password;
   const pass = rawPass ? String(rawPass).replace(/\s+/g, '') : '';
   const port = Number(portRaw) || defaultSmtp.port;
