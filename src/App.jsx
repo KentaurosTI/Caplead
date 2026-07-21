@@ -1834,7 +1834,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
       await window.electronAPI.setConfig('smtp_host', smtpConfig.host);
       await window.electronAPI.setConfig('smtp_port', smtpConfig.port);
       await window.electronAPI.setConfig('smtp_secure', String(normalizeSmtpSecure(smtpConfig.port, smtpConfig.secure)));
-      await window.electronAPI.setConfig('smtp_user', smtpConfig.user);
+      await window.electronAPI.setConfig('smtp_user', (smtpConfig.user || '').toLowerCase());
       await window.electronAPI.setConfig('gmail_pass', smtpConfig.pass);
       await window.electronAPI.setConfig('smtp_signature', smtpConfig.signatureName);
       
