@@ -5178,13 +5178,36 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
             </button>
             <button
               onClick={async () => {
-                const rows = (selectedCount > 0 ? selectedInGrid : filteredList).map(l => ({
-                  nome: l.nome || l.titulo || '', url: l.url || l.site_oficial || '',
-                  email: l.email || '', telefone: l.telefone || '',
-                  nicho: l.nicho || l.categoria || l.app_category || '',
-                  localizacao: l.localizacao || '', status: l.funil_status || 'novo',
-                  validado: l.is_validated ? 'Sim' : 'Não', data_coleta: l.data_coleta || ''
-                }));
+                const list = selectedCount > 0 ? selectedInGrid : filteredList;
+                const tc = typeCode || (list[0]?._typeCode);
+                const rows = list.map(l => {
+                  const base = {
+                    nome: l.nome || l.titulo || '',
+                    url: l.url || l.site_oficial || '',
+                    email: l.email || l.developer_email || '',
+                    telefone: l.telefone || '',
+                    localizacao: l.localizacao || '',
+                    nicho: l.nicho || l.categoria || l.app_category || '',
+                    funil_status: l.funil_status || 'novo',
+                    proximo_passo: l.proximo_passo || '',
+                    followup_date: l.followup_date || '',
+                    email_enviado: l.email_enviado ? 'Sim' : 'Não',
+                    wpp_enviado: l.wpp_enviado ? 'Sim' : 'Não',
+                    respondeu_email: l.respondeu_email ? 'Sim' : 'Não',
+                    validado: l.is_validated ? 'Sim' : 'Não',
+                    data_coleta: l.data_coleta || '',
+                  };
+                  if (tc === 'sites') {
+                    return { ...base, descricao: l.descricao || '', maps_url: l.maps_url || '', score_design: l.score_design ?? '', site_status: l.site_status || '' };
+                  }
+                  if (tc === 'sistema') {
+                    return { ...base, descricao: l.descricao || '', developer_name: l.developer_name || '', developer_site: l.developer_site || '', app_category: l.app_category || '', rating: l.rating || '', reviews_count: l.reviews_count || '', installs: l.installs || '', tipo_origem: l.tipo_origem || '', score_ux: l.score_ux ?? '' };
+                  }
+                  if (tc === 'linkedin') {
+                    return { nome: l.nome || '', url: l.url || '', cargo: l.cargo || '', empresa: l.empresa || '', localizacao: l.localizacao || '', nicho: l.nicho || '', email: l.email || '', email_enviado: l.email_enviado ? 'Sim' : 'Não', wpp_enviado: l.wpp_enviado ? 'Sim' : 'Não', respondeu_email: l.respondeu_email ? 'Sim' : 'Não', validado: l.is_validated ? 'Sim' : 'Não', data_coleta: l.data_coleta || '' };
+                  }
+                  return base;
+                });
                 const res = await window.electronAPI.exportLeadsCsv?.(rows, `leads_${typeCode}_${new Date().toISOString().slice(0,10)}.csv`);
                 if (res?.success) showToast('CSV exportado com sucesso');
                 else if (res?.error !== 'cancelled') showToast('Erro ao exportar CSV', 'error');
