@@ -325,4 +325,64 @@ db.serialize(() => {
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_linkedin_url ON leads_linkedin (url)`);
 });
 
+// ── Sistema de Migrações ───────────────────────────────────────────────────────
+// Tabela de controle de versão de schema. Cada migração é numerada e idempotente.
+// Novas colunas/índices devem ser adicionados aqui (não como ALTER TABLE avulsos).
+
+const MIGRATIONS = [
+  // Migração 001: baseline — registra o estado inicial do schema.
+  // Todas as colunas existentes foram criadas pelos ALTER TABLE no bloco acima.
+  // Esta entrada serve como ponto de partida para rastrear versões futuras.
+  { version: 1, description: 'baseline schema', sql: [] },
+
+  // Para adicionar novas colunas, crie uma entrada aqui e NÃO use ALTER TABLE avulso:
+  // { version: 2, description: 'add column X to leads_sites', sql: [
+  //   `ALTER TABLE leads_sites ADD COLUMN x TEXT`
+  // ]},
+];
+
+function runMigrations(database) {
+  database.serialize(() => {
+    database.run(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        description TEXT,
+        applied_at TEXT NOT NULL
+      )
+    `);
+  });
+
+  MIGRATIONS.forEach(({ version, description, sql }) => {
+    database.get(
+      'SELECT version FROM schema_migrations WHERE version = ?',
+      [version],
+      (err, row) => {
+        if (err) {
+          console.error(`[Migration] Erro ao verificar v${version}:`, err);
+          return;
+        }
+        if (row) return;
+
+        database.serialize(() => {
+          sql.forEach(stmt =>
+            database.run(stmt, (runErr) => {
+              if (runErr) console.error(`[Migration v${version}] Erro ao executar SQL:`, runErr);
+            })
+          );
+          database.run(
+            'INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)',
+            [version, description, new Date().toISOString()],
+            (insertErr) => {
+              if (insertErr) console.error(`[Migration] Erro ao registrar v${version}:`, insertErr);
+              else console.log(`[Migration] v${version} aplicada: ${description}`);
+            }
+          );
+        });
+      }
+    );
+  });
+}
+
+runMigrations(db);
+
 module.exports = db;
