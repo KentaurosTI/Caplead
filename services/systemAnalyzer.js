@@ -16,7 +16,7 @@ const DEFAULT_LIMIT = 50;
 
 function emit(onProgress, payload) {
   if (typeof onProgress === 'function') {
-    try { onProgress(payload); } catch (_) {}
+    try { onProgress(payload); } catch (_) { /* silenciado: callback externo não deve interromper o analisador */ }
   }
 }
 
@@ -32,7 +32,7 @@ function normalizeUrl(raw) {
         try {
           const decoded = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
           if (decoded.startsWith('http')) return normalizeUrl(decoded);
-        } catch (_) {}
+        } catch (_) { /* silenciado: falha no decode base64 do Bing redirect é esperada — retorna URL original */ }
       }
     }
     url.hash = '';
