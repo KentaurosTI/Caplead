@@ -48,6 +48,7 @@ async function scrapeLeadDesignData(browser, rawUrl, leadContext, outputDir) {
   }
 
   const page = await browser.newPage();
+  try {
   await page.setViewport({ width: 1440, height: 900 });
   await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
   await page.setBypassCSP(true);
@@ -231,8 +232,6 @@ async function scrapeLeadDesignData(browser, rawUrl, leadContext, outputDir) {
     };
   });
 
-  await page.close();
-
   const hasCoreSignals = extracted.pageTitle || extracted.h1 || (extracted.texts || []).length > 0;
   if (!hasCoreSignals || !responseOk) {
     throw new Error("SITE_UNREACHABLE");
@@ -275,6 +274,9 @@ async function scrapeLeadDesignData(browser, rawUrl, leadContext, outputDir) {
     leadDesignData,
     sourceScreenshotPath,
   };
+  } finally {
+    await page.close().catch(() => {});
+  }
 }
 
 module.exports = {
