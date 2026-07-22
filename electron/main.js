@@ -90,7 +90,9 @@ async function checkFollowupsOnStart() {
       n.on('click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
       n.show();
     }
-  } catch (_) {}
+  } catch (err) {
+    console.error('[checkFollowupsOnStart] Erro ao verificar follow-ups pendentes:', err);
+  }
 }
 
 app.whenReady().then(() => {
@@ -129,8 +131,10 @@ app.on('before-quit', () => {
     const all = fs.readdirSync(backupDir).filter(f => f.startsWith('db-auto-')).sort();
     if (all.length > 7) {
       all.slice(0, all.length - 7).forEach(f => {
-        try { fs.unlinkSync(path.join(backupDir, f)); } catch (_) {}
+        try { fs.unlinkSync(path.join(backupDir, f)); } catch (_) { /* silenciado: falha ao remover backup antigo não deve interromper encerramento */ }
       });
     }
-  } catch (_) {}
+  } catch (err) {
+    console.error('[before-quit] Falha no backup automático ao encerrar:', err);
+  }
 });

@@ -201,7 +201,7 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
   resetCancelFlag();
   const emitProgress = (payload) => {
     if (typeof onProgress === 'function') {
-      try { onProgress(payload); } catch (_) {}
+      try { onProgress(payload); } catch (_) { /* silenciado: callback externo não deve interromper o scraping */ }
     }
   };
 
@@ -251,7 +251,9 @@ async function buscarLeads(nicho, regiao, onlyWithoutSite = false, captureOption
     try {
       const dbKeys = await crud.getExistingLeadKeys();
       dbKeys.forEach(k => existingUrlsInBatch.add(k));
-    } catch (_) {}
+    } catch (err) {
+      console.error('[Scraper] Erro ao pré-carregar chaves do banco — duplicatas podem ser inseridas:', err);
+    }
 
     const searchTerms = nichoInfo.buscas?.length ? nichoInfo.buscas : [nicho];
     const queries = [...new Set(searchTerms.map(term => regiao ? `${term} em ${regiao}` : term))];
