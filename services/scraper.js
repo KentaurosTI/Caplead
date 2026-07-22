@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const crud = require('./crud');
 const { getBrowserPath } = require('./browserPath');
+const { normalizePhoneDigits, isBrazilWhatsappPhone } = require('../src/utils/phoneUtils');
 
 // Cancellation flag — set via cancelSearch(), checked inside buscarLeads loop
 let _cancelFlag = false;
@@ -530,16 +531,6 @@ async function scrapeGoogleMaps(page, query, coords, options = {}) {
     console.error(`[Google Maps] Erro geral na busca: ${e.message}`);
   }
   return results;
-}
-
-function normalizePhoneDigits(value = '') {
-  let digits = String(value || '').replace(/\D/g, '');
-  if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) digits = digits.slice(2);
-  return digits;
-}
-
-function isBrazilWhatsappPhone(value = '') {
-  return /^\d{2}9\d{8}$/.test(normalizePhoneDigits(value));
 }
 
 function resolveLeadContactSelection(lead = {}, candidateContacts = {}) {
