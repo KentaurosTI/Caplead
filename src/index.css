@@ -2,7 +2,7 @@
 @import "tailwindcss";
 
 @theme {
-  --color-dark: #0B1020;
+  --color-dark: #0B0C0E;
   --color-surface: #111827;
   --color-surface-hover: #151C2E;
   --color-primary: #3B82F6;
@@ -17,8 +17,8 @@
 }
 
 :root {
-  --cap-bg: #0B1020;
-  --cap-sidebar: #080D18;
+  --cap-bg: #0B0C0E;
+  --cap-sidebar: #07080A;
   --cap-surface: #111827;
   --cap-surface-2: #151C2E;
   --cap-surface-3: #1E293B;
@@ -61,8 +61,8 @@
   body {
     @apply text-slate-200 font-sans h-screen overflow-hidden antialiased;
     background:
-      radial-gradient(circle at 64% -12%, rgba(59, 130, 246, 0.12), transparent 36rem),
-      linear-gradient(180deg, #0B1020 0%, #080D18 100%);
+      radial-gradient(circle at 64% -12%, rgba(59, 130, 246, 0.08), transparent 36rem),
+      linear-gradient(180deg, #0B0C0E 0%, #07080A 100%);
     color: var(--cap-text);
     font-size: 14px;
     font-weight: 500;
@@ -184,9 +184,7 @@
     height: 100vh;
     overflow-y: auto;
     padding: 32px 36px 44px;
-    background:
-      radial-gradient(circle at 70% -10%, rgba(59, 130, 246, 0.10), transparent 34rem),
-      var(--cap-bg);
+    background: var(--cap-bg);
   }
 
   .premium-card {
@@ -316,6 +314,58 @@
 .animate-fade-in {
   animation: fadeIn 0.28s ease-out forwards;
 }
+
+/* ── Terminal / Industrial lead grid ─────────────────────── */
+
+:root {
+  --cap-mono: 'JetBrains Mono', 'Courier New', 'Consolas', monospace;
+}
+
+.lead-grid-table thead th {
+  background: #07090B !important;
+  font-family: var(--cap-mono) !important;
+  font-size: 10px !important;
+  letter-spacing: 0.09em !important;
+  color: #3A4F65 !important;
+  border-bottom: 1px solid rgba(245, 158, 11, 0.14) !important;
+  box-shadow: none !important;
+}
+
+.lead-grid-row:hover {
+  background: rgba(255, 255, 255, 0.022) !important;
+}
+
+.lead-grid-row.row-selected {
+  background: rgba(245, 158, 11, 0.055) !important;
+  box-shadow: inset 3px 0 0 #F59E0B;
+}
+
+.cell-mono {
+  font-family: var(--cap-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: var(--cap-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  width: max-content;
+}
+
+.status-pill.s-novo     { background: rgba(34, 197, 94, 0.10);  color: #4ADE80;  border: 1px solid rgba(34, 197, 94, 0.22); }
+.status-pill.s-validado { background: rgba(59, 130, 246, 0.10); color: #93C5FD;  border: 1px solid rgba(59, 130, 246, 0.22); }
+.status-pill.s-enviado  { background: rgba(100, 116, 139, 0.10); color: #94A3B8; border: 1px solid rgba(100, 116, 139, 0.20); }
+.status-pill.s-followup { background: rgba(139, 92, 246, 0.10); color: #C4B5FD;  border: 1px solid rgba(139, 92, 246, 0.22); }
+.status-pill.s-pendente { background: rgba(245, 158, 11, 0.07); color: #D97706;  border: 1px solid rgba(245, 158, 11, 0.16); }
 
 @media (max-width: 1120px) {
   .premium-shell {
