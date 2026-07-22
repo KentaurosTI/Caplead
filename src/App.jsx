@@ -5129,10 +5129,10 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
     };
 
     return (
-      <div className="p-8 animate-fade-in h-full flex flex-col bg-surface">
+      <div className="p-8 animate-fade-in h-full flex flex-col" style={{background:'#0B0C0E'}}>
         <div className="flex justify-between items-center mb-6">
           <div className="flex items-center gap-3">
-            <h2 className="text-3xl font-bold text-white">{typeTitle}</h2>
+            <h2 className="text-3xl font-bold text-white" style={{fontFamily:"var(--cap-mono)"}}>{typeTitle}</h2>
             <button
               onClick={() => setIsCompact(p => !p)}
               title={isCompact ? 'Modo confortável' : 'Modo compacto'}
@@ -5261,25 +5261,25 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-5">
-          <div className="rounded-2xl bg-white/[0.03] border border-white/5 px-4 py-3">
-            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Filtrados</span>
-            <p className="text-white text-xl font-black mt-1">{totalItems}</p>
+          <div className="rounded-2xl border px-4 py-3" style={{background:'rgba(245,158,11,0.04)',borderColor:'rgba(245,158,11,0.15)'}}>
+            <span className="cell-mono text-[10px] uppercase tracking-[0.1em] text-amber-600 font-bold">Total</span>
+            <p className="cell-mono text-amber-400 text-xl font-black mt-1">{totalItems}</p>
           </div>
           <div className="rounded-2xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3">
-            <span className="text-[10px] uppercase tracking-wider text-emerald-300 font-bold">Alta oportunidade</span>
-            <p className="text-emerald-300 text-xl font-black mt-1">{gridStats.high}</p>
+            <span className="cell-mono text-[10px] uppercase tracking-[0.1em] text-emerald-400 font-bold">Oportunidades</span>
+            <p className="cell-mono text-emerald-300 text-xl font-black mt-1">{gridStats.high}</p>
           </div>
           <div className="rounded-2xl bg-primary/10 border border-primary/20 px-4 py-3">
-            <span className="text-[10px] uppercase tracking-wider text-primary font-bold">Com e-mail</span>
-            <p className="text-primary text-xl font-black mt-1">{gridStats.email}</p>
+            <span className="cell-mono text-[10px] uppercase tracking-[0.1em] text-primary font-bold">Com e-mail</span>
+            <p className="cell-mono text-primary text-xl font-black mt-1">{gridStats.email}</p>
           </div>
-          <div className="rounded-2xl bg-amber-500/10 border border-amber-500/20 px-4 py-3">
-            <span className="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Pendentes envio</span>
-            <p className="text-amber-300 text-xl font-black mt-1">{gridStats.pendingEmail}</p>
+          <div className="rounded-2xl border px-4 py-3" style={{background:'rgba(100,116,139,0.08)',borderColor:'rgba(100,116,139,0.18)'}}>
+            <span className="cell-mono text-[10px] uppercase tracking-[0.1em] text-slate-400 font-bold">Pendentes envio</span>
+            <p className="cell-mono text-slate-300 text-xl font-black mt-1">{gridStats.pendingEmail}</p>
           </div>
           <div className="rounded-2xl bg-red-500/10 border border-red-500/20 px-4 py-3">
-            <span className="text-[10px] uppercase tracking-wider text-red-300 font-bold">Follow-up hoje</span>
-            <p className="text-red-300 text-xl font-black mt-1">{gridStats.due}</p>
+            <span className="cell-mono text-[10px] uppercase tracking-[0.1em] text-red-400 font-bold">Follow-up hoje</span>
+            <p className="cell-mono text-red-300 text-xl font-black mt-1">{gridStats.due}</p>
           </div>
         </div>
 
@@ -5484,11 +5484,11 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
           </div>
         )}
         
-        <div className="flex-1 overflow-auto rounded-3xl border border-white/5 glass relative">
-          <table className="w-full text-left text-sm text-slate-300">
+        <div className="flex-1 overflow-auto rounded-3xl border border-amber-500/10 relative" style={{background:'#0B0C0E'}}>
+          <table className="w-full text-left text-sm text-slate-300 lead-grid-table">
             <thead className="uppercase font-semibold text-xs text-slate-400">
               <tr>
-                <th className="px-6 py-5 w-12 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">
+                <th className="px-6 py-5 w-12 sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)]">
                   <input
                     type="checkbox"
                     checked={allVisibleSelected}
@@ -5498,7 +5498,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   />
                 </th>
                 <th
-                  className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)] cursor-pointer select-none hover:text-white transition-colors"
+                  className="px-6 py-5 sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)] cursor-pointer select-none hover:text-white transition-colors"
                   onClick={() => cycleSort('nome')}
                   title="Ordenar por nome"
                 >
@@ -5509,9 +5509,9 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     {gridSort.col !== 'nome' && <ChevronsUpDown size={12} className="opacity-30" />}
                   </span>
                 </th>
-                <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Contato</th>
+                <th className="px-6 py-5 sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)]">Contato</th>
                 <th
-                  className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)] cursor-pointer select-none hover:text-white transition-colors"
+                  className="px-6 py-5 sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)] cursor-pointer select-none hover:text-white transition-colors"
                   onClick={() => cycleSort('oportunidade')}
                   title="Ordenar por score de oportunidade"
                 >
@@ -5522,9 +5522,9 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     {gridSort.col !== 'oportunidade' && <ChevronsUpDown size={12} className="opacity-30" />}
                   </span>
                 </th>
-                <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Próxima ação</th>
-                <th className="px-6 py-5 sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Status</th>
-                <th className="px-6 py-5 text-right sticky top-0 z-30 bg-[#141c2f] shadow-[0_1px_0_rgba(255,255,255,0.08),0_10px_24px_rgba(2,6,23,0.28)]">Ações</th>
+                <th className="px-6 py-5 sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)]">Próxima ação</th>
+                <th className="px-6 py-5 sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)]">Status</th>
+                <th className="px-6 py-5 text-right sticky top-0 z-30 bg-[#07090B] shadow-[0_1px_0_rgba(245,158,11,0.12),0_10px_24px_rgba(2,6,23,0.36)]">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -5570,7 +5570,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                   const selectionKey = getLeadSelectionKey(lead, rowTypeCode);
                   const isSelected = selectedLeadKeys.includes(selectionKey);
                   return (
-                  <tr key={`${rowTypeCode}-${lead.id}`} className={`hover:bg-white/5 transition-colors ${isSelected ? 'bg-primary/10' : lead.is_pinned ? 'bg-primary/5' : ''}`}>
+                  <tr key={`${rowTypeCode}-${lead.id}`} className={`lead-grid-row transition-colors ${isSelected ? 'row-selected' : lead.is_pinned ? 'bg-amber-500/5' : ''}`}>
                     <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <input
                         type="checkbox"
@@ -5595,7 +5595,7 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                             <Globe size={14} />
                           </div>
                         )}
-                        <div className="font-semibold text-white truncate max-w-[220px]">{lead.nome || lead.titulo || lead.url}</div>
+                        <div className="cell-mono font-semibold text-white truncate max-w-[220px]">{lead.nome || lead.titulo || lead.url}</div>
                       </div>
                       <div className="ml-9 mt-1 flex flex-wrap items-center gap-2">
                         {lead.tipo_origem && (
@@ -5702,26 +5702,22 @@ ${smtpConfig.signatureName || 'CapLead'} & Kentaurus TI`;
                     </td>
                     <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'}`}>
                       <div className="flex flex-col gap-1">
-                        {lead.is_validated ? (
-                          <span className="inline-flex items-center gap-1 bg-primary/20 text-primary text-[10px] px-2 py-0.5 rounded-md font-medium w-max">Validado</span>
+                        {lead.email_enviado ? (
+                          <span className="status-pill s-enviado"><Check size={10} /> Enviado</span>
+                        ) : lead.is_validated ? (
+                          <span className="status-pill s-validado">Validado</span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 bg-amber-500/20 text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-medium w-max">Pendente</span>
+                          <span className="status-pill s-novo">Novo</span>
                         )}
                         {lead.funil_status && lead.funil_status !== 'novo' && (
-                          <span className="inline-flex items-center gap-1 bg-violet-500/15 text-violet-300 text-[10px] px-2 py-0.5 rounded-md font-medium w-max capitalize">
-                            {lead.funil_status}
-                          </span>
+                          <span className="status-pill s-followup capitalize">{lead.funil_status}</span>
                         )}
                         {followup.state !== 'none' && (
-                          <span className={`inline-flex items-center gap-1 ${followup.bg} ${followup.color} text-[10px] px-2 py-0.5 rounded-md font-medium border ${followup.border} w-max`}>
-                            <Clock size={10} /> {followup.label}
-                          </span>
+                          <span className="status-pill s-followup"><Clock size={10} /> {followup.label}</span>
                         )}
-                      {hasGeneratedLayout(lead) && (
-                        <span className="inline-flex items-center gap-1 bg-amber-500/20 text-amber-300 text-[10px] px-2 py-0.5 rounded-md font-medium w-max">
-                          <LayoutTemplate size={10} /> Layout pronto
-                        </span>
-                      )}
+                        {hasGeneratedLayout(lead) && (
+                          <span className="status-pill s-pendente"><LayoutTemplate size={10} /> Layout</span>
+                        )}
                       </div>
                     </td>
                     <td className={`px-6 ${isCompact ? 'py-2' : 'py-4'} text-right`}>
