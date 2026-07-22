@@ -323,6 +323,11 @@ db.serialize(() => {
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_sistemas_package ON leads_sistemas (package_id) WHERE package_id IS NOT NULL AND TRIM(package_id) != ''`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_leads_sistemas_origem ON leads_sistemas (tipo_origem)`);
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_linkedin_url ON leads_linkedin (url)`);
+
+  // Índices de busca por nicho/categoria para acelerar listagem (CAP-24)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_leads_sites_categoria ON leads_sites (categoria)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_leads_linkedin_nicho ON leads_linkedin (nicho)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_leads_sistemas_category ON leads_sistemas (app_category)`);
 });
 
 module.exports = db;
